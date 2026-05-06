@@ -1,0 +1,9 @@
+{
+  "name": "TokMatch",
+  "description": "TokMatch: A rede social definitiva para conexões reais. Feed de vídeos estilo TikTok, chamadas de vídeo, match aleatório com modo 'Naughty', lives interativas com sistema de presentes e verificação biométrica de idade por IA.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": []
+}

@@ -1,0 +1,145 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "coverURL": { "type": "string" },
+        "bio": { "type": "string" },
+        "blockedUsers": { "type": "array", "items": { "type": "string" } },
+        "followersCount": { "type": "number" },
+        "followingCount": { "type": "number" },
+        "ageVerified": { "type": "boolean" },
+        "ageVerifiedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "email"]
+    },
+    "Video": {
+      "title": "Video",
+      "description": "Video feed content",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "creatorId": { "type": "string" },
+        "videoUrl": { "type": "string" },
+        "thumbnailUrl": { "type": "string" },
+        "description": { "type": "string" },
+        "likesCount": { "type": "number" },
+        "commentsCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["creatorId", "videoUrl"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "Conversation between users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "participants": { "type": "array", "items": { "type": "string" } },
+        "lastMessage": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["participants"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Individual message in a chat",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "chatId": { "type": "string" },
+        "participants": { "type": "array", "items": { "type": "string" } },
+        "senderId": { "type": "string" },
+        "text": { "type": "string" },
+        "type": { "type": "string", "enum": ["text", "audio", "video"] },
+        "callDuration": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["chatId", "participants", "senderId", "text", "type"]
+    },
+    "MatchSession": {
+      "title": "MatchSession",
+      "description": "Active or pending random video match",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "status": { "type": "string", "enum": ["searching", "matched"] },
+        "matchedWith": { "type": "string" },
+        "peerId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "status"]
+    },
+    "Live": {
+      "title": "Live",
+      "description": "Information about an active live stream",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "creatorId": { "type": "string" },
+        "creatorName": { "type": "string" },
+        "creatorPhoto": { "type": "string" },
+        "title": { "type": "string" },
+        "thumbnailUrl": { "type": "string" },
+        "streamUrl": { "type": "string" },
+        "viewerCount": { "type": "number" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["creatorId", "streamUrl", "title"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "Comment on a video",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "videoId": { "type": "string" },
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["videoId", "userId", "text"]
+    }
+  },
+  "firestore": {
+    "users": {
+      "schema": "User",
+      "description": "Collection of user profiles"
+    },
+    "videos": {
+      "schema": "Video",
+      "description": "Collection of videos for the feed"
+    },
+    "videos/{videoId}/comments": {
+      "schema": "Comment",
+      "description": "Subcollection of comments for a video"
+    },
+    "chats": {
+      "schema": "Chat",
+      "description": "Collection of chat threads"
+    },
+    "chats/{chatId}/messages": {
+      "schema": "Message",
+      "description": "Subcollection of messages within a chat"
+    },
+    "matches": {
+      "schema": "MatchSession",
+      "description": "Collection for random video matching queue"
+    },
+    "lives": {
+      "schema": "Live",
+      "description": "Collection of active live streams"
+    }
+  }
+}
