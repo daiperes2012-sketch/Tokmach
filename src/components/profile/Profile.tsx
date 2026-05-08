@@ -18,11 +18,15 @@ import {
   Camera,
   Plus,
   Video,
+  VideoOff,
   Image as ImageIcon,
   Radio,
   Upload,
   Loader2,
-  Play
+  Play,
+  MessageCircle,
+  Share2,
+  MoreHorizontal
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AgeVerification } from '../auth/AgeVerification';
@@ -44,8 +48,9 @@ export default function Profile() {
   const [uploadCaption, setUploadCaption] = useState('');
   const [previewFile, setPreviewFile] = useState<string | null>(null);
   const [userVideos, setUserVideos] = useState<any[]>([]);
+  const [userPhotos, setUserPhotos] = useState<any[]>([]);
   const [likedVideos, setLikedVideos] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<'posts' | 'likes'>('posts');
+  const [activeTab, setActiveTab] = useState<'posts' | 'gallery' | 'likes'>('posts');
   const [totalLikesReceived, setTotalLikesReceived] = useState(0);
   const [editName, setEditName] = useState(profile?.displayName || '');
   const [editBio, setEditBio] = useState(profile?.bio || '');
@@ -54,6 +59,32 @@ export default function Profile() {
   const [uploadingProfile, setUploadingProfile] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [selectedMedia, setSelectedMedia] = useState<any | null>(null);
+  const [selectedMediaIndex, setSelectedMediaIndex] = useState(0);
+
+  const getCurrentList = () => {
+    if (activeTab === 'posts') return userVideos;
+    if (activeTab === 'gallery') return userPhotos;
+    return likedVideos;
+  };
+
+  const handleNextMedia = () => {
+    const list = getCurrentList();
+    if (selectedMediaIndex < list.length - 1) {
+      const nextIndex = selectedMediaIndex + 1;
+      setSelectedMediaIndex(nextIndex);
+      setSelectedMedia(list[nextIndex]);
+    }
+  };
+
+  const handlePrevMedia = () => {
+    const list = getCurrentList();
+    if (selectedMediaIndex > 0) {
+      const prevIndex = selectedMediaIndex - 1;
+      setSelectedMediaIndex(prevIndex);
+      setSelectedMedia(list[prevIndex]);
+    }
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const coverInputRef = useRef<HTMLInputElement>(null);
@@ -69,27 +100,65 @@ export default function Profile() {
     }
   }, [editName, editBio, editPhotoURL, editCoverURL, profile, isEditing]);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'profile' | 'cover') => {
+  const compressImage = (base64Str: string): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.src = base64Str;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        // Accept any resolution, but scale down if it exceeds bounds to prevent crash
+        const MAX_DIMENSION = 1600; 
+        let width = img.width;
+        let height = img.height;
+
+        if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+          if (width > height) {
+            height *= MAX_DIMENSION / width;
+            width = MAX_DIMENSION;
+          } else {
+            width *= MAX_DIMENSION / height;
+            height = MAX_DIMENSION;
+          }
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        
+        // Dynamic quality adjustment to ensure we stay under ~900KB Base64
+        let quality = 0.8;
+        let result = canvas.toDataURL('image/jpeg', quality);
+        
+        while (result.length > 900000 && quality > 0.1) {
+          quality -= 0.1;
+          result = canvas.toDataURL('image/jpeg', quality);
+        }
+        
+        resolve(result);
+      };
+    });
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'profile' | 'cover') => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    if (file.size > 800 * 1024) {
-      alert("A imagem é muito grande. Por favor, escolha uma imagem com menos de 800KB.");
-      return;
-    }
 
     const reader = new FileReader();
     reader.onloadstart = () => {
       if (type === 'profile') setUploadingProfile(true);
       else setUploadingCover(true);
     };
-    reader.onloadend = () => {
+    reader.onloadend = async () => {
       const base64String = reader.result as string;
+      // Compress profile/cover images too
+      const compressed = await compressImage(base64String);
+      
       if (type === 'profile') {
-        setEditPhotoURL(base64String);
+        setEditPhotoURL(compressed);
         setUploadingProfile(false);
       } else {
-        setEditCoverURL(base64String);
+        setEditCoverURL(compressed);
         setUploadingCover(false);
       }
     };
@@ -128,11 +197,14 @@ export default function Profile() {
       orderBy('createdAt', 'desc')
     );
 
-    const unsub = onSnapshot(q, (snap) => {
+    const unsub = onSnapshot(q, { includeMetadataChanges: false }, (snap) => {
       const videos = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
       setUserVideos(videos);
+      setUserPhotos(videos.filter(v => 
+        v.type === 'photo' || 
+        (v.videoUrl && (v.videoUrl.startsWith('data:image/') || v.videoUrl.match(/\.(jpg|jpeg|png|webp|gif|svg)$|dicebear/i)))
+      ));
       
-      // Calculate total likes received
       const total = videos.reduce((sum, vid) => sum + (vid.likesCount || 0), 0);
       setTotalLikesReceived(total);
     }, (err) => {
@@ -144,7 +216,6 @@ export default function Profile() {
 
   const [likedVideoIds, setLikedVideoIds] = useState<string[]>([]);
 
-  // Fetch liked video IDs
   useEffect(() => {
     if (!user) return;
     
@@ -164,7 +235,6 @@ export default function Profile() {
     return unsubscribe;
   }, [user]);
 
-  // Fetch the actual video details when IDs change
   useEffect(() => {
     let active = true;
     const fetchVideos = async () => {
@@ -174,15 +244,8 @@ export default function Profile() {
       }
 
       try {
-        // Use whereIn query to fetch multiple videos at once (limit is 30)
-        // This is much more stable than multiple getDoc calls
         const idsToFetch = likedVideoIds.slice(0, 30);
         
-        if (idsToFetch.length === 0) {
-          setLikedVideos([]);
-          return;
-        }
-
         const videosQuery = query(
           collection(db, 'videos'),
           where(documentId(), 'in', idsToFetch)
@@ -196,11 +259,9 @@ export default function Profile() {
           ...doc.data() 
         }));
         
-        // Sort them to match the liked order if possible, 
-        // or just accept the query order which is fine for now
         setLikedVideos(videosData);
       } catch (error) {
-        console.error("Error fetching liked videos data:", error);
+        handleFirestoreError(error, OperationType.LIST, 'videos (likes metadata)');
       }
     };
 
@@ -211,12 +272,26 @@ export default function Profile() {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: uploadType === 'video' ? { 'video/*': [] } : { 'image/*': [] },
     maxFiles: 1,
-    onDrop: (acceptedFiles) => {
+    onDrop: async (acceptedFiles) => {
       if (acceptedFiles.length > 0) {
         const file = acceptedFiles[0];
+        
+        // Video limit: ~750KB binary
+        if (uploadType === 'video' && file.size > 750000) {
+          alert('Este vídeo é muito grande. Optimize-o ou reduza a duração antes de publicar.');
+          setPreviewFile('https://player.vimeo.com/external/370331493.sd.mp4?s=2907373ae13977a493fb0efeb986381005a761e2&profile_id=139&oauth2_token_id=57447761');
+          return;
+        }
+
         const reader = new FileReader();
-        reader.onloadend = () => {
-          setPreviewFile(reader.result as string);
+        reader.onloadend = async () => {
+          const result = reader.result as string;
+          if (uploadType === 'photo') {
+            const compressed = await compressImage(result);
+            setPreviewFile(compressed);
+          } else {
+            setPreviewFile(result);
+          }
         };
         reader.readAsDataURL(file);
       }
@@ -228,15 +303,16 @@ export default function Profile() {
     
     setIsUploading(true);
     try {
-      // For images, we use the Base64 directly
-      // For videos, since they might be too large for Firestore's 1MB limit in base64, 
-      // we check size or use a high-quality stock asset if it's too big.
       let finalAssetUrl = previewFile;
       
-      if (uploadType === 'video' && previewFile.length > 700000) {
-        // Fallback for large videos in prototype (Base64 is ~33% larger than binary)
-        // 700k base64 is roughly 525k binary. 1MB limit means we should be careful.
-        finalAssetUrl = 'https://player.vimeo.com/external/370331493.sd.mp4?s=2907373ae13977a493fb0efeb986381005a761e2&profile_id=139&oauth2_token_id=57447761';
+      // Safety threshold: Firestore documents must be < 1MB. 
+      if (previewFile.length > 900000) {
+        if (uploadType === 'video') {
+          finalAssetUrl = 'https://player.vimeo.com/external/370331493.sd.mp4?s=2907373ae13977a493fb0efeb986381005a761e2&profile_id=139&oauth2_token_id=57447761';
+          console.warn("Video too large for database, using optimized fallback");
+        } else {
+          throw new Error('A imagem é muito grande para os limites do banco de dados, tente outra.');
+        }
       }
       
       await addDoc(collection(db, 'videos'), {
@@ -403,6 +479,15 @@ export default function Profile() {
             <Grid size={22} />
           </button>
           <button 
+            onClick={() => setActiveTab('gallery')}
+            className={cn(
+              "flex-1 py-4 flex justify-center transition-all",
+              activeTab === 'gallery' ? "border-b-2 border-white text-white" : "text-zinc-500 opacity-50"
+            )}
+          >
+            <ImageIcon size={22} />
+          </button>
+          <button 
             onClick={() => setActiveTab('likes')}
             className={cn(
               "flex-1 py-4 flex justify-center transition-all",
@@ -416,8 +501,15 @@ export default function Profile() {
         {activeTab === 'posts' ? (
           userVideos.length > 0 ? (
             <div className="grid grid-cols-3 gap-0.5">
-              {userVideos.map((vid) => (
-                <VideoThumbnail key={vid.id} vid={vid} />
+              {userVideos.map((vid, idx) => (
+                <VideoThumbnail 
+                  key={vid.id} 
+                  vid={vid} 
+                  onClick={() => {
+                    setSelectedMediaIndex(idx);
+                    setSelectedMedia(vid);
+                  }} 
+                />
               ))}
             </div>
           ) : (
@@ -426,11 +518,38 @@ export default function Profile() {
               <p className="text-sm font-medium text-center">Nenhum conteúdo publicado ainda.<br/>Toque no "+" para começar!</p>
             </div>
           )
+        ) : activeTab === 'gallery' ? (
+          userPhotos.length > 0 ? (
+            <div className="grid grid-cols-3 gap-0.5">
+              {userPhotos.map((vid, idx) => (
+                <VideoThumbnail 
+                  key={vid.id} 
+                  vid={vid} 
+                  onClick={() => {
+                    setSelectedMediaIndex(idx);
+                    setSelectedMedia(vid);
+                  }} 
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-20 px-6 opacity-30">
+              <ImageIcon size={48} strokeWidth={1} className="mb-4" />
+              <p className="text-sm font-medium text-center">Nenhuma foto na sua galeria.<br/>Poste uma foto no feed!</p>
+            </div>
+          )
         ) : (
           likedVideos.length > 0 ? (
             <div className="grid grid-cols-3 gap-0.5">
-              {likedVideos.map((vid) => (
-                <VideoThumbnail key={vid.id} vid={vid} />
+              {likedVideos.map((vid, idx) => (
+                <VideoThumbnail 
+                  key={vid.id} 
+                  vid={vid} 
+                  onClick={() => {
+                    setSelectedMediaIndex(idx);
+                    setSelectedMedia(vid);
+                  }} 
+                />
               ))}
             </div>
           ) : (
@@ -441,6 +560,178 @@ export default function Profile() {
           )
         )}
       </div>
+
+      {/* Media Viewer Modal */}
+      <AnimatePresence>
+        {selectedMedia && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black z-[100] flex flex-col overflow-hidden"
+          >
+            {/* Blurred Background */}
+            <div className="absolute inset-0 z-0">
+              {selectedMedia.type === 'photo' || (selectedMedia.videoUrl && (selectedMedia.videoUrl.startsWith('data:image/') || selectedMedia.videoUrl.match(/\.(jpg|jpeg|png|webp|gif|svg)$|dicebear/i))) ? (
+                <img src={selectedMedia.videoUrl} className="w-full h-full object-cover blur-2xl opacity-40 scale-110" />
+              ) : (
+                <div className="w-full h-full bg-zinc-900" />
+              )}
+              <div className="absolute inset-0 bg-black/60" />
+            </div>
+
+            <div className="relative z-10 flex-1 flex flex-col">
+              {/* Header */}
+              <div className="p-6 flex justify-between items-center bg-gradient-to-b from-black/80 to-transparent">
+                <button 
+                  onClick={() => setSelectedMedia(null)}
+                  className="p-3 bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 hover:bg-white/10 active:scale-90 transition-all"
+                >
+                  <X size={24} />
+                </button>
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-2xl overflow-hidden border border-white/20 shadow-lg">
+                    <img src={profile.photoURL} className="w-full h-full object-cover" />
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-xs font-black uppercase tracking-[0.2em]">{profile.displayName}</span>
+                    <span className="text-[9px] text-zinc-500 font-mono tracking-tighter">PUBLISHED: {new Date(selectedMedia.createdAt?.toDate?.() || Date.now()).toLocaleDateString('pt-BR')}</span>
+                  </div>
+                </div>
+                <button className="p-3 bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 hover:bg-white/10 transition-all">
+                  <MoreHorizontal size={24} />
+                </button>
+              </div>
+
+              {/* Main Content Area */}
+              <div className="flex-1 flex items-center justify-between px-4 relative">
+                {/* Navigation Buttons (Desktop/Tablet) */}
+                <button 
+                  onClick={handlePrevMedia}
+                  disabled={selectedMediaIndex === 0}
+                  className={cn(
+                    "hidden md:flex p-4 rounded-full bg-black/40 backdrop-blur-md border border-white/10 hover:bg-white/10 transition-all disabled:opacity-0",
+                    selectedMediaIndex === 0 && "cursor-default"
+                  )}
+                >
+                  <ChevronRight size={24} className="rotate-180" />
+                </button>
+
+                <motion.div 
+                  drag="y"
+                  dragConstraints={{ top: 0, bottom: 0 }}
+                  onDragEnd={(_, info) => {
+                    if (info.offset.y > 150 || info.offset.y < -150) {
+                      setSelectedMedia(null);
+                    }
+                  }}
+                  layoutId={selectedMedia.id}
+                  className="relative w-full max-w-lg aspect-[9/16] md:aspect-[3/4] rounded-[2.5rem] md:rounded-[3rem] overflow-hidden shadow-[0_0_80px_rgba(0,0,0,0.8)] bg-black border border-white/10 cursor-grab active:cursor-grabbing"
+                >
+                  {!selectedMedia.videoUrl ? (
+                    <div className="w-full h-full flex flex-col items-center justify-center bg-zinc-950 text-zinc-600">
+                      <VideoOff size={48} className="opacity-20 mb-4" />
+                      <p className="text-[10px] uppercase tracking-widest font-black">Mídia Indisponível</p>
+                    </div>
+                  ) : selectedMedia.type === 'photo' || (selectedMedia.videoUrl && (selectedMedia.videoUrl.startsWith('data:image/') || selectedMedia.videoUrl.match(/\.(jpg|jpeg|png|webp|gif|svg)$|dicebear/i))) ? (
+                    <img src={selectedMedia.videoUrl} className="w-full h-full object-cover" draggable={false} />
+                  ) : (
+                    <video 
+                      key={selectedMedia.videoUrl}
+                      src={selectedMedia.videoUrl} 
+                      className="w-full h-full object-cover"
+                      autoPlay
+                      loop
+                      playsInline
+                      controls={false}
+                      onClick={(e) => {
+                        const v = e.currentTarget;
+                        if (v.paused) v.play();
+                        else v.pause();
+                      }}
+                      onError={(e) => {
+                        console.warn("Media viewer video error:", e);
+                        // We could show an error state here if we had one for the viewer
+                      }}
+                    />
+                  )}
+                  
+                  {/* Swipe indicator */}
+                  <div className="absolute bottom-4 inset-x-0 flex flex-col items-center gap-1 opacity-40 pointer-events-none">
+                    <div className="w-12 h-1 bg-white/30 rounded-full" />
+                    <span className="text-[8px] font-black uppercase tracking-widest">Arraste para fechar</span>
+                  </div>
+                </motion.div>
+
+                <button 
+                  onClick={handleNextMedia}
+                  disabled={selectedMediaIndex === getCurrentList().length - 1}
+                  className={cn(
+                    "hidden md:flex p-4 rounded-full bg-black/40 backdrop-blur-md border border-white/10 hover:bg-white/10 transition-all disabled:opacity-0",
+                    selectedMediaIndex === getCurrentList().length - 1 && "cursor-default"
+                  )}
+                >
+                  <ChevronRight size={24} />
+                </button>
+
+                {/* Mobile Tap Areas for Navigation */}
+                <div className="absolute inset-y-0 left-0 w-1/4 z-10 md:hidden" onClick={handlePrevMedia} />
+                <div className="absolute inset-y-0 right-0 w-1/4 z-10 md:hidden" onClick={handleNextMedia} />
+              </div>
+
+              {/* Bottom Info Section */}
+              <div className="p-8 bg-gradient-to-t from-black via-black/80 to-transparent">
+                <div className="max-w-lg mx-auto">
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-8">
+                      <div className="flex flex-col items-center gap-1">
+                        <motion.button 
+                          whileTap={{ scale: 0.8 }}
+                          className={cn(
+                            "p-3 rounded-2xl transition-all",
+                            selectedMedia.likesCount > 0 ? "bg-pink-500/20 text-pink-500" : "bg-white/5 text-white"
+                          )}
+                        >
+                          <Heart size={26} className={cn(selectedMedia.likesCount > 0 && "fill-current")} />
+                        </motion.button>
+                        <span className="text-[10px] font-black italic tracking-widest">{selectedMedia.likesCount || 0}</span>
+                      </div>
+                      <div className="flex flex-col items-center gap-1">
+                        <button className="p-3 rounded-2xl bg-white/5 text-white">
+                          <MessageCircle size={26} />
+                        </button>
+                        <span className="text-[10px] font-black italic tracking-widest">{selectedMedia.commentsCount || 0}</span>
+                      </div>
+                      <div className="flex flex-col items-center gap-1">
+                        <button className="p-3 rounded-2xl bg-white/5 text-white">
+                          <Share2 size={26} />
+                        </button>
+                        <span className="text-[10px] font-black italic tracking-widest">SHARE</span>
+                      </div>
+                    </div>
+                    
+                    <div className="flex flex-col items-end gap-2">
+                       <div className="px-4 py-2 bg-white text-black rounded-xl font-black uppercase text-[10px] tracking-widest">
+                          {selectedMedia.type === 'video' ? 'VIDEO' : 'STILL'}
+                       </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white/5 backdrop-blur-md rounded-[2rem] p-6 border border-white/10">
+                    <p className="text-zinc-200 text-sm font-semibold italic leading-relaxed mb-4">
+                      {selectedMedia.description}
+                    </p>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[8px] font-mono text-zinc-500 uppercase tracking-widest">ID: {selectedMedia.id}</span>
+                      <span className="text-[10px] font-black text-pink-500 italic uppercase">#VIBE #PREMIUM</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Floating Create Menu */}
       <div className="fixed bottom-24 right-6 z-40">
@@ -952,42 +1243,38 @@ function CreateOption({ icon: Icon, label, color, onClick, delay }: { icon: any,
   );
 }
 
-function VideoThumbnail({ vid }: { vid: any }) {
+function VideoThumbnail({ vid, onClick }: { vid: any, onClick: () => void }) {
+  const [hasError, setHasError] = useState(false);
+  const isPhoto = vid.type === 'photo' || (vid.videoUrl && (vid.videoUrl.startsWith('data:image/') || vid.videoUrl.match(/\.(jpg|jpeg|png|webp|gif|svg)$|dicebear/i)));
+
   return (
-    <div key={vid.id} className="aspect-[3/4] bg-zinc-900 overflow-hidden relative group">
-      {vid.videoUrl && (vid.videoUrl.includes('mp4') || vid.type === 'video') ? (
+    <div key={vid.id} onClick={onClick} className="aspect-[3/4] bg-zinc-900 overflow-hidden relative group cursor-pointer">
+      {!vid.videoUrl || hasError ? (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-zinc-950">
+          <ImageIcon size={24} className="text-zinc-800/50 mb-1" />
+          <span className="text-[6px] text-zinc-800 uppercase font-black">Link Erro</span>
+        </div>
+      ) : isPhoto ? (
+        <img 
+          src={vid.videoUrl} 
+          className="w-full h-full object-cover opacity-60"
+          onError={() => setHasError(true)}
+        />
+      ) : (
         <video 
+          key={vid.videoUrl}
           src={vid.videoUrl} 
           className="w-full h-full object-cover opacity-60"
           muted
           playsInline
           loop
-          onLoadedMetadata={(e) => {
-            e.currentTarget.play().catch(e => {
-              if (e.name !== 'AbortError') console.warn("Profile video play failed", e);
-            });
-          }}
-          onError={(e) => {
+          onLoadedData={(e) => {
             const video = e.currentTarget;
-            const fallback = "https://www.w3schools.com/html/mov_bbb.mp4";
-            if (video.src !== fallback) {
-              video.src = fallback;
-            }
+            video.play().catch(() => {});
           }}
+          onError={() => setHasError(true)}
         />
-      ) : vid.videoUrl ? (
-        <img 
-          src={vid.videoUrl} 
-          className="w-full h-full object-cover opacity-60"
-          onError={(e) => {
-            const img = e.currentTarget;
-            const fallback = 'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&q=80&w=1000';
-            if (img.src !== fallback) {
-              img.src = fallback;
-            }
-          }}
-        />
-      ) : null}
+      )}
       <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40">
         <Play size={20} className="text-white fill-white" />
       </div>

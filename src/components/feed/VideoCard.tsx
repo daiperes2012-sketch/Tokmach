@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { VideoPost, VideoComment } from '../../types';
-import { Flame, MessageCircle, Share2, Music2, UserPlus, VideoOff, Send, X, Loader2 } from 'lucide-react';
+import { Flame, MessageCircle, Share2, Music2, UserPlus, VideoOff, Send, X, Loader2, MoreVertical, Trash2, Edit3, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -38,11 +38,21 @@ export default function VideoCard({ video }: VideoCardProps) {
   const [comments, setComments] = useState<VideoComment[]>([]);
   const [newComment, setNewComment] = useState('');
   const [loadingComments, setLoadingComments] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [editDescription, setEditDescription] = useState(video.description || '');
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Check if user has liked this video
+  const isOwner = user?.uid === video.creatorId;
+
+  // Check if user has liked this video - Only when card is visible or near visible
+  const [hasCheckedLike, setHasCheckedLike] = useState(false);
+  const [isVisible, setIsVisible] = useState(false);
+
   useEffect(() => {
-    if (!user || !video.id) return;
+    if (!user || !video.id || !isVisible || hasCheckedLike) return;
     
     const q = query(
       collection(db, 'likes'),
@@ -52,12 +62,13 @@ export default function VideoCard({ video }: VideoCardProps) {
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setLiked(!snapshot.empty);
+      setHasCheckedLike(true);
     }, (error) => {
-      console.warn("Error checking like state", error);
+      handleFirestoreError(error, OperationType.GET, 'likes');
     });
 
     return () => unsubscribe();
-  }, [user, video.id]);
+  }, [user, video.id, isVisible, hasCheckedLike]);
 
   const toggleLike = async () => {
     if (!user || !video.id) return;
@@ -108,31 +119,82 @@ export default function VideoCard({ video }: VideoCardProps) {
     }
   };
 
+  const handleDelete = async () => {
+    if (!video.id || isDeleting) return;
+    if (!window.confirm("Tem certeza que deseja excluir este vídeo?")) return;
+
+    setIsDeleting(true);
+    try {
+      await deleteDoc(doc(db, 'videos', video.id));
+      // No need to show success message, onSnapshot in Feed will remove it
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `videos/${video.id}`);
+    } finally {
+      setIsDeleting(false);
+      setShowMenu(false);
+    }
+  };
+
+  const handleUpdate = async () => {
+    if (!video.id || isUpdating || !editDescription.trim()) return;
+
+    setIsUpdating(true);
+    try {
+      await updateDoc(doc(db, 'videos', video.id), {
+        description: editDescription.trim()
+      });
+      setShowEditModal(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `videos/${video.id}`);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   useEffect(() => {
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
           if (entry.isIntersecting) {
-            if (videoRef.current && !hasError) {
-              videoRef.current.play().catch(error => {
-                if (error.name !== "NotAllowedError") {
-                  console.error("Autoplay error:", error);
-                }
-              });
+            setIsVisible(true);
+            if (videoRef.current && !hasError && video.type !== 'photo') {
+              const playPromise = videoRef.current.play();
+              if (playPromise !== undefined) {
+                playPromise.catch(error => {
+                  if (error.name !== "NotAllowedError" && error.name !== "AbortError") {
+                    console.warn("Video play failed:", error);
+                  }
+                });
+              }
               setPlaying(true);
             }
           } else {
-            videoRef.current?.pause();
+            if (videoRef.current) {
+              videoRef.current.pause();
+            }
             setPlaying(false);
+            
+            // Unload if very far from viewport to save memory/data
+            if (entry.boundingClientRect.top > window.innerHeight * 2 || entry.boundingClientRect.bottom < -window.innerHeight) {
+              setIsVisible(false);
+            }
           }
         });
       },
-      { threshold: 0.6 }
+      { 
+        rootMargin: '300px', // Extra margin for better loading
+        threshold: 0.1 
+      }
     );
 
-    if (videoRef.current) observer.observe(videoRef.current);
+    if (videoRef.current || video.type === 'photo') {
+      const element = videoRef.current || (document.getElementById(`video-container-${video.id}`));
+      if (element) observer.observe(element);
+    }
+    
+    // Fallback observer target for images or when ref is not yet available
     return () => observer.disconnect();
-  }, [hasError]);
+  }, [hasError, video.type, video.id]);
 
   useEffect(() => {
     if (showComments && video.id) {
@@ -211,8 +273,23 @@ export default function VideoCard({ video }: VideoCardProps) {
     }
   };
 
+  const handleDeleteComment = async (commentId: string) => {
+    if (!video.id || !commentId || isDeleting) return;
+    if (!window.confirm("Deseja excluir este comentário?")) return;
+
+    try {
+      await deleteDoc(doc(db, 'videos', video.id, 'comments', commentId));
+      // Decrement comment count
+      await updateDoc(doc(db, 'videos', video.id), {
+        commentsCount: increment(-1)
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `videos/${video.id}/comments/${commentId}`);
+    }
+  };
+
   return (
-    <div className="h-full w-full snap-start relative bg-black group">
+    <div id={`video-container-${video.id}`} className="h-full w-full snap-start relative bg-black group">
       {!video.videoUrl || hasError ? (
         <div className="h-full w-full flex flex-col items-center justify-center bg-zinc-950 text-zinc-600 gap-4">
           <div className="p-8 rounded-full bg-zinc-900/50 border border-white/5">
@@ -223,38 +300,38 @@ export default function VideoCard({ video }: VideoCardProps) {
             <p className="text-[8px] text-zinc-500 font-mono">CODE: {video.id?.slice(0, 8)}</p>
           </div>
         </div>
-      ) : video.type === 'photo' ? (
+      ) : video.type === 'photo' || (video.videoUrl && (video.videoUrl.startsWith('data:image/') || video.videoUrl.match(/\.(jpg|jpeg|png|webp|gif|svg)$|dicebear/i))) ? (
         <div className="h-full w-full relative">
           <img 
-            src={video.videoUrl} 
+            src={isVisible ? video.videoUrl : ''} 
             alt={video.description}
-            className="h-full w-full object-cover opacity-90"
+            className="h-full w-full object-cover opacity-90 transition-opacity duration-1000"
+            style={{ opacity: isVisible ? 0.9 : 0 }}
             onError={() => setHasError(true)}
           />
         </div>
       ) : (
         <video
+          key={video.videoUrl}
           ref={videoRef}
-          src={video.videoUrl}
-          className="h-full w-full object-cover opacity-80"
+          src={isVisible ? video.videoUrl : undefined}
+          className="h-full w-full object-cover opacity-80 transition-opacity duration-1000"
+          style={{ opacity: isVisible ? 0.8 : 0 }}
           loop
           muted
           playsInline
           preload="metadata"
           onClick={togglePlay}
-          onLoadedMetadata={(e) => {
-            const videoElement = e.currentTarget;
-            if (playing) {
-               videoElement.play().catch(e => {
-                 if (e.name !== 'AbortError' && e.name !== 'NotAllowedError') {
-                   console.warn("Video autostart failed", e);
-                 }
-               });
+          onCanPlay={() => {
+            if (playing && videoRef.current) {
+               videoRef.current.play().catch(() => {});
             }
           }}
           onError={(e) => {
             const videoElement = e.currentTarget;
-            console.warn("Video failed to load:", videoElement.src);
+            if (videoElement.error && videoElement.error.code === 4) {
+               console.warn("Video source not supported or missing:", video.videoUrl);
+            }
             setHasError(true);
           }}
           poster={video.thumbnailUrl}
@@ -262,6 +339,105 @@ export default function VideoCard({ video }: VideoCardProps) {
       )}
 
       <div className="absolute inset-0 bg-gradient-to-b from-purple-900/40 via-transparent to-black pointer-events-none" />
+
+      {/* Top Header Actions */}
+      <div className="absolute top-6 left-0 right-0 px-4 flex items-center justify-between z-20">
+        <div className="flex items-center gap-2">
+          {/* Back button or logo could go here if needed, but keeping it clean */}
+        </div>
+        
+        {isOwner && (
+          <div className="relative">
+            <button 
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowMenu(!showMenu);
+              }}
+              className="p-2 bg-black/20 backdrop-blur-md rounded-full text-white/70 hover:text-white hover:bg-black/40 transition-all border border-white/5 active:scale-90"
+            >
+              <MoreVertical size={20} />
+            </button>
+
+            <AnimatePresence>
+              {showMenu && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9, y: -10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.9, y: -10 }}
+                  className="absolute right-0 mt-2 w-48 bg-zinc-900/90 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden py-1 z-50"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button 
+                    onClick={() => {
+                      setShowEditModal(true);
+                      setShowMenu(false);
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-3 text-sm text-zinc-300 hover:bg-white/5 hover:text-white transition-colors"
+                  >
+                    <Edit3 size={16} />
+                    <span>Editar legenda</span>
+                  </button>
+                  <div className="h-px bg-white/5 mx-2" />
+                  <button 
+                    onClick={handleDelete}
+                    disabled={isDeleting}
+                    className="w-full flex items-center gap-3 px-4 py-3 text-sm text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+                  >
+                    {isDeleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                    <span>Excluir vídeo</span>
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
+      </div>
+
+      {/* Edit Modal */}
+      <AnimatePresence>
+        {showEditModal && (
+          <div className="absolute inset-0 z-[60] flex items-center justify-center px-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowEditModal(false)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="w-full max-w-sm bg-zinc-900 border border-white/10 rounded-3xl p-6 shadow-2xl relative z-10"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-lg font-bold text-white">Editar Legenda</h3>
+                <button onClick={() => setShowEditModal(false)} className="text-zinc-500 hover:text-white">
+                  <X size={24} />
+                </button>
+              </div>
+              
+              <textarea
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                placeholder="Escreva algo sobre este vídeo..."
+                className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-sm text-white h-32 focus:outline-none focus:ring-2 focus:ring-pink-500/50 transition-all resize-none mb-6"
+                autoFocus
+              />
+              
+              <button
+                onClick={handleUpdate}
+                disabled={isUpdating || !editDescription.trim() || editDescription === video.description}
+                className="w-full bg-gradient-to-r from-pink-500 to-rose-600 text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-50 disabled:grayscale"
+              >
+                {isUpdating ? <Loader2 size={20} className="animate-spin" /> : <Check size={20} />}
+                <span>Salvar Alterações</span>
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Right Actions */}
       <div className="absolute right-4 bottom-24 flex flex-col items-center gap-6 z-10">
@@ -373,10 +549,21 @@ export default function VideoCard({ video }: VideoCardProps) {
                       </div>
                       <div className="flex-1">
                         <div className="flex items-center justify-between mb-0.5">
-                          <span className="font-bold text-[11px] text-zinc-300">@{comment.displayName}</span>
-                          <span className="text-[9px] text-zinc-600 font-mono">
-                            {comment.createdAt?.toDate ? new Date(comment.createdAt.toDate()).toLocaleDateString() : 'Agora'}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-[11px] text-zinc-300">@{comment.displayName}</span>
+                            <span className="text-[9px] text-zinc-600 font-mono">
+                              {comment.createdAt?.toDate ? new Date(comment.createdAt.toDate()).toLocaleDateString() : 'Agora'}
+                            </span>
+                          </div>
+                          {(user?.uid === comment.userId || user?.uid === video.creatorId) && (
+                            <button 
+                              onClick={() => handleDeleteComment(comment.id)}
+                              className="text-zinc-600 hover:text-red-400 opacity-0 group-hover/comment:opacity-100 transition-all p-1"
+                              title="Excluir comentário"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          )}
                         </div>
                         <p className="text-sm text-zinc-400 leading-relaxed">{comment.text}</p>
                       </div>
@@ -419,6 +606,16 @@ export default function VideoCard({ video }: VideoCardProps) {
         </div>
         <p className="text-sm line-clamp-2 mb-4 leading-relaxed text-zinc-200 drop-shadow-sm">{video.description}</p>
         
+        {video.commentsCount > 0 && (
+          <button 
+            onClick={() => setShowComments(true)}
+            className="flex items-center gap-2 mb-4 text-[10px] uppercase font-black text-pink-500/80 hover:text-pink-500 transition-colors tracking-widest bg-pink-500/5 px-3 py-1.5 rounded-lg border border-pink-500/10 w-fit active:scale-95"
+          >
+            <MessageCircle size={14} />
+            <span>Ver {video.commentsCount} comentários</span>
+          </button>
+        )}
+
         <div className="flex items-center gap-2 overflow-hidden bg-black/20 w-fit px-3 py-1 rounded-full backdrop-blur-sm border border-white/5">
           <Music2 size={14} className="shrink-0 text-pink-500 animate-pulse" />
           <div className="text-[10px] font-medium whitespace-nowrap overflow-hidden text-zinc-300 uppercase tracking-widest">

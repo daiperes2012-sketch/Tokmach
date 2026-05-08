@@ -67,7 +67,7 @@ function ThreadItem({ thread, userId, onClick }: { thread: ChatThread, userId: s
           setPartner(docSnap.data() as UserProfile);
         }
       } catch (error) {
-        console.error("Error fetching partner profile:", error);
+        handleFirestoreError(error, OperationType.GET, `users/${partnerId}`);
       }
     };
     fetchPartner();
@@ -87,7 +87,7 @@ function ThreadItem({ thread, userId, onClick }: { thread: ChatThread, userId: s
             className="w-full h-full object-cover rounded-[1rem] group-hover:scale-110 transition-transform duration-500"
           />
         </div>
-        {thread.updatedAt && (
+        {thread.updatedAt === null && (
            <div className="absolute -top-1 -right-1 w-5 h-5 bg-pink-500 border-2 border-black rounded-full flex items-center justify-center">
               <span className="text-[10px] font-black text-white">1</span>
            </div>
@@ -100,7 +100,7 @@ function ThreadItem({ thread, userId, onClick }: { thread: ChatThread, userId: s
             {partner?.displayName || 'Usuário'}
           </h3>
           <span className="text-[10px] text-zinc-500 font-medium">
-            {thread.updatedAt ? formatDistanceToNow(thread.updatedAt.toDate(), { addSuffix: false, locale: ptBR }) : ''}
+            {thread.updatedAt ? formatDistanceToNow(thread.updatedAt.toDate(), { addSuffix: false, locale: ptBR }) : 'Agora'}
           </span>
         </div>
         <p className="text-xs text-zinc-500 truncate group-hover:text-zinc-300 transition-colors font-medium">

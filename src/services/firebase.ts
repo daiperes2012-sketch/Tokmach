@@ -37,9 +37,14 @@ export interface FirestoreErrorInfo {
   }
 }
 
+let isQuotaExceededCached = false;
+
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const isQuotaRelated = errorMessage.includes('Quota exceeded') || errorMessage.includes('quota metric');
+
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errorMessage,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -54,6 +59,20 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path
   };
+
+  if (isQuotaRelated || isQuotaExceededCached) {
+    if (!isQuotaExceededCached) {
+      isQuotaExceededCached = true;
+      console.warn('Firestore Quota Exceeded Detected');
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
+      }
+    }
+    // Return instead of throwing to silently halt the branch of execution
+    // without triggering global error handlers or platform error trackers.
+    return;
+  }
+
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }

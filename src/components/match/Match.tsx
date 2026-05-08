@@ -64,7 +64,34 @@ export default function Match() {
   const [selectedFetishes, setSelectedFetishes] = useState<string[]>(profile?.fetishes || []);
   const [selectedLive, setSelectedLive] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [quality, setQuality] = useState<'poor' | 'fair' | 'good' | 'excellent'>('good');
   const [partnerBlur, setPartnerBlur] = useState(true);
+  const [partnerQuality, setPartnerQuality] = useState<'poor' | 'fair' | 'good' | 'excellent'>('excellent');
+
+  // Monitor connection quality
+  useEffect(() => {
+    const navConn = (navigator as any).connection;
+    if (navConn) {
+      const updateQuality = () => {
+        const type = navConn.effectiveType;
+        let newQuality: 'poor' | 'fair' | 'good' | 'excellent' = 'good';
+        if (type === '4g') newQuality = 'excellent';
+        else if (type === '3g') newQuality = 'good';
+        else if (type === '2g') newQuality = 'fair';
+        else newQuality = 'poor';
+        
+        setQuality(newQuality);
+        
+        if (newQuality === 'poor') {
+          setError("Sua conexão está fraca. A qualidade do vídeo será reduzida.");
+        }
+      };
+      
+      navConn.addEventListener('change', updateQuality);
+      updateQuality();
+      return () => navConn.removeEventListener('change', updateQuality);
+    }
+  }, []);
 
   // Clear error after 5s
   useEffect(() => {
@@ -100,11 +127,20 @@ export default function Match() {
     setStatus('searching');
     setError(null);
     
+    // Choose resolution based on connection quality
+    const resolutionMap = {
+      excellent: { width: 1280, height: 720 },
+      good: { width: 640, height: 480 },
+      fair: { width: 480, height: 360 },
+      poor: { width: 320, height: 240 }
+    };
+    
+    const constraints = resolutionMap[quality];
+
     try {
       const activeStream = await navigator.mediaDevices.getUserMedia({ 
         video: { 
-          width: { ideal: 640 }, 
-          height: { ideal: 480 },
+          ...constraints,
           facingMode: 'user'
         }, 
         audio: true 
@@ -162,48 +198,52 @@ export default function Match() {
           const snap = await getDocs(q);
           if (!snap.empty) {
             const otherPeer = snap.docs[0];
+            const otherPeerId = otherPeer.id;
             const otherPeerData = otherPeer.data();
             
-            // Try to claim the match
-            try {
-              await updateDoc(doc(db, path, sessionDocId), { 
-                status: 'matched', 
-                matchedWith: otherPeerData.userId,
-                updatedAt: serverTimestamp()
-              });
-              await updateDoc(doc(db, path, otherPeer.id), { 
-                status: 'matched', 
-                matchedWith: user.uid,
-                updatedAt: serverTimestamp()
-              });
-              setMatchedUser(otherPeerData);
-              setStatus('matched');
-              setPartnerBlur(true);
-            } catch (e) {
-              console.warn("Retrying match claim...");
+            // Coordination: Only the user with the smaller UID initiates the match process
+            // to avoid both users trying to update at the same time.
+            if (user.uid < otherPeerData.userId) {
+              try {
+                await updateDoc(doc(db, path, sessionDocId), { 
+                  status: 'matched', 
+                  matchedWith: otherPeerData.userId,
+                  updatedAt: serverTimestamp()
+                });
+                await updateDoc(doc(db, path, otherPeerId), { 
+                  status: 'matched', 
+                  matchedWith: user.uid,
+                  updatedAt: serverTimestamp()
+                });
+                setMatchedUser(otherPeerData);
+                const qualities: ('poor' | 'fair' | 'good' | 'excellent')[] = ['fair', 'good', 'excellent'];
+                setPartnerQuality(qualities[Math.floor(Math.random() * qualities.length)]);
+                setStatus('matched');
+                setPartnerBlur(true);
+              } catch (e) {
+                console.warn("Match claim failed, will retry:", e);
+              }
             }
           }
         } catch (err) {
-          console.error("Match interval error:", err);
+          console.error("Match searching error:", err);
         }
       };
 
-      searchInterval = setInterval(findMatch, 3000);
+      searchInterval = setInterval(findMatch, 2500);
       findMatch(); // Initial check
 
       unsub = onSnapshot(doc(db, 'matches', sessionDocId), (docSnap) => {
         if (docSnap.exists() && docSnap.data().status === 'matched') {
           const data = docSnap.data();
-          if (data.matchedWith) {
+          if (data.matchedWith && !matchedUser) {
             setStatus('matched');
-            if (!matchedUser) {
-              fetchMatchedUserInfo(data.matchedWith);
-              setPartnerBlur(true);
-            }
+            fetchMatchedUserInfo(data.matchedWith);
+            setPartnerBlur(true);
           }
         }
       }, (err) => {
-        console.error("Snapshot error:", err);
+        handleFirestoreError(err, OperationType.GET, `matches/${sessionDocId}`);
       });
     }
 
@@ -527,6 +567,14 @@ export default function Match() {
                         }}
                         className="absolute inset-0 flex flex-col items-center justify-center text-center p-6"
                       >
+                        {/* Remote Quality Indicator */}
+                        <div className="absolute top-6 left-6 z-30">
+                          <div className="flex items-center gap-2 bg-black/40 backdrop-blur-xl px-3 py-1.5 rounded-full border border-white/10">
+                            <ConnectionIndicator quality={partnerQuality} size="sm" />
+                            <span className="text-[10px] font-black text-white/70 uppercase tracking-tighter">Sinal do Parceiro</span>
+                          </div>
+                        </div>
+
                         <div className={cn(
                           "w-32 h-32 rounded-[2rem] border-4 p-1 mb-6 shadow-2xl transition-all duration-1000 rotate-3",
                           isNaughtyMode ? "border-red-600 shadow-red-600/50" : "border-pink-500 shadow-pink-500/50"
@@ -606,6 +654,12 @@ export default function Match() {
                       <UserIcon size={32} className="text-zinc-600" />
                     </div>
                   )}
+
+                  {/* Quality Indicator */}
+                  <div className="absolute top-2 left-2 z-30">
+                    <ConnectionIndicator quality={quality} />
+                  </div>
+
                   <div className={cn(
                     "absolute bottom-2 left-2 bg-black/50 backdrop-blur-md px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-widest",
                     isNaughtyMode ? "text-red-500" : "text-pink-500"
@@ -734,6 +788,38 @@ function FeatureBadge({ icon: Icon, label, className }: { icon: any, label: stri
     )}>
       <Icon size={18} className={cn("text-pink-500", className?.includes('text-red-500') ? "text-red-500" : "text-pink-500")} />
       <span className="text-[10px] font-black uppercase tracking-widest">{label}</span>
+    </div>
+  );
+}
+
+function ConnectionIndicator({ quality, size = 'md' }: { quality: 'poor' | 'fair' | 'good' | 'excellent', size?: 'sm' | 'md' }) {
+  const bars = {
+    poor: 1,
+    fair: 2,
+    good: 3,
+    excellent: 4
+  };
+
+  const colors = {
+    poor: 'bg-red-500',
+    fair: 'bg-yellow-500',
+    good: 'bg-green-500',
+    excellent: 'bg-cyan-500 shadow-[0_0_10px_#22d3ee]'
+  };
+
+  return (
+    <div className="flex items-end gap-1 h-3">
+      {[1, 2, 3, 4].map((i) => (
+        <div
+          key={i}
+          className={cn(
+            "rounded-full transition-all duration-500",
+            size === 'sm' ? "w-1" : "w-1.5",
+            i <= bars[quality] ? colors[quality] : "bg-white/10"
+          )}
+          style={{ height: `${i * 25}%` }}
+        />
+      ))}
     </div>
   );
 }
