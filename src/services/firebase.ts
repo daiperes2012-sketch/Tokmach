@@ -40,8 +40,16 @@ export interface FirestoreErrorInfo {
 let isQuotaExceededCached = false;
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errorMessage = error instanceof Error ? error.message : String(error);
+  // Use a string representation of the error to avoid circular structure issues
+  const errorMessage = error instanceof Error ? error.message : 
+                       (typeof error === 'object' && error !== null) ? 
+                       (error as any).message || String(error) : 
+                       String(error);
+                       
   const isQuotaRelated = errorMessage.includes('Quota exceeded') || errorMessage.includes('quota metric');
+
+  // Sanitize path to ensure it's a string
+  const safePath = typeof path === 'string' ? path : String(path);
 
   const errInfo: FirestoreErrorInfo = {
     error: errorMessage,
@@ -57,7 +65,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
       })) || []
     },
     operationType,
-    path
+    path: safePath
   };
 
   if (isQuotaRelated || isQuotaExceededCached) {
@@ -68,13 +76,22 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
         window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
       }
     }
-    // Return instead of throwing to silently halt the branch of execution
-    // without triggering global error handlers or platform error trackers.
     return;
   }
 
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  // Safe stringify helper to prevent circular structure crashes
+  const safeStringify = (obj: any) => {
+    try {
+      return JSON.stringify(obj);
+    } catch (e) {
+      console.warn('Circular structure detected in error info, using fallback serialization');
+      return String(obj);
+    }
+  };
+
+  const serializedErrorInfo = safeStringify(errInfo);
+  console.error('Firestore Error: ', serializedErrorInfo);
+  throw new Error(serializedErrorInfo);
 }
 
 // Connectivity Test

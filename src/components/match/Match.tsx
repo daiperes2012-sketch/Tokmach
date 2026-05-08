@@ -40,18 +40,17 @@ import { cn } from '../../lib/utils';
 import LivesList from './LivesList';
 import LiveSession from './LiveSession';
 import LiveBroadcast from './LiveBroadcast';
-import { AgeVerification } from '../auth/AgeVerification';
+import { useToast } from '../../hooks/useToast';
 
 const PRESET_FETISHES = ['Submisso', 'Dominante', 'BDSM', 'Fetichista', 'Voyeur', 'Exibicionismo', 'Roleplay', 'Lingerie'];
 
 export default function Match() {
   const { profile, user, updateProfile } = useAuth();
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<'match' | 'lives'>('match');
   const [isNaughtyMode, setIsNaughtyMode] = useState(false);
   const [status, setStatus] = useState<'idle' | 'searching' | 'matched'>('idle');
-  const [showAgeVerification, setShowAgeVerification] = useState(false);
   const [showLiveBroadcast, setShowLiveBroadcast] = useState(false);
-  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
   const [matchedUser, setMatchedUser] = useState<any>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isCameraOff, setIsCameraOff] = useState(false);
@@ -67,6 +66,7 @@ export default function Match() {
   const [quality, setQuality] = useState<'poor' | 'fair' | 'good' | 'excellent'>('good');
   const [partnerBlur, setPartnerBlur] = useState(true);
   const [partnerQuality, setPartnerQuality] = useState<'poor' | 'fair' | 'good' | 'excellent'>('excellent');
+  const [callTimeLeft, setCallTimeLeft] = useState(30);
 
   // Monitor connection quality
   useEffect(() => {
@@ -112,13 +112,6 @@ export default function Match() {
   const startSearching = async () => {
     if (!user) return;
     
-    // Check Age Verification
-    if (!profile?.ageVerified) {
-      setPendingAction(() => startSearching);
-      setShowAgeVerification(true);
-      return;
-    }
-
     if (selectedFetishes.length === 0) {
       setError("Escolha pelo menos uma preferência para encontrar seu par ideal.");
       return;
@@ -154,7 +147,7 @@ export default function Match() {
         if (err.name === 'NotAllowedError') errorMsg = "Permissão de câmera negada. Verifique as configurações do navegador.";
         else if (err.name === 'NotFoundError') errorMsg = "Nenhuma câmera encontrada.";
       }
-      alert(errorMsg);
+      toast('error', errorMsg);
       setError(errorMsg);
       setStatus('idle');
       return;
@@ -306,6 +299,23 @@ export default function Match() {
       if (stream) stream.getTracks().forEach(track => track.stop());
     };
   }, [sessionDocId, stream]);
+
+  useEffect(() => {
+    if (status === 'matched') {
+      setCallTimeLeft(30);
+      const timer = setInterval(() => {
+        setCallTimeLeft((prev) => {
+          if (prev <= 1) {
+            clearInterval(timer);
+            stopSearching();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [status]);
 
   useEffect(() => {
     if (status === 'matched') {
@@ -568,18 +578,30 @@ export default function Match() {
                         className="absolute inset-0 flex flex-col items-center justify-center text-center p-6"
                       >
                         {/* Remote Quality Indicator */}
-                        <div className="absolute top-6 left-6 z-30">
+                        <div className="absolute top-6 left-6 z-30 flex flex-col gap-2">
                           <div className="flex items-center gap-2 bg-black/40 backdrop-blur-xl px-3 py-1.5 rounded-full border border-white/10">
                             <ConnectionIndicator quality={partnerQuality} size="sm" />
                             <span className="text-[10px] font-black text-white/70 uppercase tracking-tighter">Sinal do Parceiro</span>
                           </div>
+                          
+                          <motion.div 
+                            initial={{ scale: 0.9, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            className={cn(
+                              "flex items-center gap-2 bg-black/40 backdrop-blur-xl px-3 py-1.5 rounded-full border border-white/10 self-start",
+                              callTimeLeft <= 10 ? "border-red-500 text-red-500 animate-pulse" : "text-white"
+                            )}
+                          >
+                            <Loader2 size={12} className={cn(callTimeLeft > 0 && "animate-spin")} />
+                            <span className="text-xs font-black tracking-tighter">{callTimeLeft}s restantes</span>
+                          </motion.div>
                         </div>
 
                         <div className={cn(
                           "w-32 h-32 rounded-[2rem] border-4 p-1 mb-6 shadow-2xl transition-all duration-1000 rotate-3",
                           isNaughtyMode ? "border-red-600 shadow-red-600/50" : "border-pink-500 shadow-pink-500/50"
                         )}>
-                          <img src={matchedUser?.photoURL} className="w-full h-full rounded-[1.75rem] object-cover" />
+                          <img src={matchedUser?.photoURL || undefined} className="w-full h-full rounded-[1.75rem] object-cover" />
                         </div>
                         <h2 className={cn(
                           "text-4xl font-black italic uppercase tracking-tighter mb-2",
@@ -737,10 +759,6 @@ export default function Match() {
             onSelectLive={(live) => {
               setSelectedLive(live);
             }} 
-            onVerifRequired={(action) => {
-              setPendingAction(() => action);
-              setShowAgeVerification(true);
-            }}
             onStartLive={() => {
               setShowLiveBroadcast(true);
             }}
@@ -753,21 +771,6 @@ export default function Match() {
           <LiveSession 
             live={selectedLive} 
             onClose={() => setSelectedLive(null)} 
-          />
-        )}
-        {showAgeVerification && (
-          <AgeVerification 
-            onSuccess={() => {
-              setShowAgeVerification(false);
-              if (pendingAction) {
-                pendingAction();
-                setPendingAction(null);
-              }
-            }}
-            onCancel={() => {
-              setShowAgeVerification(false);
-              setPendingAction(null);
-            }}
           />
         )}
         {showLiveBroadcast && (

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../hooks/useAuth';
+import { useToast } from '../../hooks/useToast';
 import { 
   collection, 
   query, 
@@ -113,6 +114,7 @@ function ThreadItem({ thread, userId, onClick }: { thread: ChatThread, userId: s
 
 export default function Messages() {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeChat, setActiveChat] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -325,7 +327,7 @@ function MessageItem({ msg, isMine }: { msg: ChatMessage, isMine: boolean }) {
         )}>
           {msg.type === 'image' ? (
             <img 
-              src={msg.text} 
+              src={msg.text || undefined} 
               alt="Shared" 
               className="max-w-full rounded-2xl mb-1 cursor-pointer hover:opacity-90 transition-opacity" 
               onClick={() => window.open(msg.text, '_blank')}
@@ -366,6 +368,7 @@ function MessageItem({ msg, isMine }: { msg: ChatMessage, isMine: boolean }) {
 
 function ChatRoom({ chatId, onBack }: { chatId: string, onBack: () => void }) {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -404,7 +407,7 @@ function ChatRoom({ chatId, onBack }: { chatId: string, onBack: () => void }) {
     if (!file) return;
 
     if (file.size > 1024 * 1024) { // 1MB limit for chat
-      alert("A imagem é muito grande (máx 1MB).");
+      toast('error', "A imagem é muito grande (máx 1MB).");
       return;
     }
 

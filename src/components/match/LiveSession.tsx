@@ -3,6 +3,7 @@ import { X, Users, Heart, Share2, Send, Flame, MessageSquare, Gift, Coins } from
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../../lib/utils';
 import { useAuth } from '../../hooks/useAuth';
+import { useToast } from '../../hooks/useToast';
 
 interface LiveStream {
   id: string;
@@ -28,6 +29,7 @@ export default function LiveSession({ live, onClose }: { live: LiveStream; onClo
   const [showGifts, setShowGifts] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const { profile, updateProfile } = useAuth();
+  const { toast } = useToast();
   
   const colors = ['text-blue-400', 'text-pink-400', 'text-yellow-400', 'text-green-400', 'text-purple-400'];
   const simulatedNames = ['Safadinha_88', 'LoverBoy', 'User99', 'HotGaby', 'NoiteFogo', 'PrivacyX', 'Ousado_123'];
@@ -67,7 +69,7 @@ export default function LiveSession({ live, onClose }: { live: LiveStream; onClo
 
   const sendGift = async (gift: typeof gifts[0]) => {
     if ((profile?.balance || 0) < gift.price) {
-      alert("Saldo insuficiente! Compre mais moedas na loja.");
+      toast('warning', "Saldo insuficiente! Compre mais moedas na loja.");
       return;
     }
 
@@ -112,7 +114,7 @@ export default function LiveSession({ live, onClose }: { live: LiveStream; onClo
         {live.streamUrl && (
           <video 
             ref={videoRef}
-            src={live.streamUrl}
+            src={live.streamUrl || undefined}
             loop 
             muted 
             playsInline
@@ -136,7 +138,7 @@ export default function LiveSession({ live, onClose }: { live: LiveStream; onClo
       {/* Header */}
       <div className="relative p-6 flex justify-between items-start z-10 pt-12">
         <div className="flex items-center gap-3 bg-black/40 backdrop-blur-xl p-2 pr-4 rounded-full border border-white/10">
-          <img src={live.creatorPhoto} className="w-10 h-10 rounded-full border-2 border-pink-500" />
+          <img src={live.creatorPhoto || undefined} className="w-10 h-10 rounded-full border-2 border-pink-500" />
           <div>
             <p className="text-white text-sm font-bold leading-none">{live.creatorName}</p>
             <div className="flex items-center gap-1.5 mt-1">

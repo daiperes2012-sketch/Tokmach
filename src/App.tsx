@@ -1,10 +1,13 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { useNotifications } from './hooks/useNotifications';
+import { ToastProvider, useToast } from './hooks/useToast';
 import Navigation from './components/layout/Navigation';
 import Logo from './components/common/Logo';
-import { LogIn, Video, Bell, Mail, Apple, Chrome, UserCircle, AlertTriangle, X, Phone, ChevronLeft } from 'lucide-react';
+import ErrorBoundary from './components/common/ErrorBoundary';
+import { LogIn, Video, Bell, Chrome, UserCircle, AlertTriangle, X, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { auth } from './services/firebase';
 
 // Lazy load heavy views for faster initial loading
 const Feed = lazy(() => import('./components/feed/Feed'));
@@ -33,10 +36,9 @@ function AppContent() {
   const [activeTab, setActiveTab] = useState<'feed' | 'match' | 'messages' | 'profile' | 'store'>('feed');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [loginMethod, setLoginMethod] = useState<'options' | 'phone'>('options');
-  const [phoneNumber, setPhoneNumber] = useState('');
+  const [loginMethod, setLoginMethod] = useState<'options'>('options');
 
-  // Request notifications on first login
+   // Request notifications on first login
   useEffect(() => {
     if (user && permission === 'default') {
       const timer = setTimeout(() => {
@@ -61,28 +63,28 @@ function AppContent() {
   }
 
   if (!user) {
-    const handleLogin = async () => {
+    const handleLogin = async (method: 'google' | 'anonymous' = 'google') => {
       setIsLoggingIn(true);
       setLoginError(null);
       try {
-        await login();
+        await login(method);
       } catch (error: any) {
         console.error("Login failed:", error);
-        setLoginError("Ocorreu um erro ao entrar. Tente novamente.");
+        if (error.code === 'auth/popup-closed-by-user') {
+          setLoginError("Login cancelado. Tente novamente.");
+        } else if (error.code === 'auth/network-request-failed') {
+          setLoginError("Erro de rede. Verifique sua conexão.");
+        } else if (error.code === 'auth/admin-restricted-operation') {
+          setLoginError("Operação restrita. Certifique-se de que o método de login (Google/Anônimo) está ativado no Firebase Console.");
+        } else if (error.code === 'auth/invalid-credential') {
+          setLoginError("Credencial inválida. Isso pode ocorrer se as chaves da API não estiverem configuradas corretamente ou se a sessão expirou.");
+        } else {
+          setLoginError("Erro ao entrar. " + (error.message || "Tente novamente."));
+        }
       } finally {
         setIsLoggingIn(false);
       }
     };
-
-    const handlePhoneSubmit = (e: React.FormEvent) => {
-      e.preventDefault();
-      if (phoneNumber.length < 8) {
-        setLoginError('Por favor, insira um número válido.');
-        return;
-      }
-      handleLogin();
-    };
-
 
     return (
       <div className="relative flex flex-col items-center justify-center min-h-screen bg-black overflow-hidden font-sans p-6">
@@ -140,7 +142,7 @@ function AppContent() {
               Tok<span className="text-pink-500">Match</span>
             </h1>
             <p className="text-zinc-400 mb-10 text-xs leading-relaxed font-bold uppercase tracking-widest opacity-80 px-4">
-              {loginMethod === 'options' ? 'Real connections, real vibes.' : 'Entrar com telefone'}
+              Real connections, real vibes.
             </p>
 
             {/* Error Message */}
@@ -158,132 +160,45 @@ function AppContent() {
             </AnimatePresence>
 
             <AnimatePresence mode="wait">
-              {loginMethod === 'options' ? (
-                <motion.div 
-                  key="options"
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 20 }}
-                  className="space-y-3"
+              <motion.div 
+                key="options"
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+                className="space-y-4"
+              >
+                <div className="grid grid-cols-1 gap-3 mb-3">
+                  <button
+                    onClick={() => handleLogin('google')}
+                    disabled={isLoggingIn}
+                    className="group relative h-14 overflow-hidden rounded-2xl transition-all active:scale-[0.98] disabled:opacity-80 shadow-xl shadow-pink-500/5 focus:outline-none focus:ring-2 focus:ring-pink-500/20"
+                    id="login-google"
+                  >
+                    <div className="absolute inset-0 bg-white" />
+                    <div className="relative flex items-center justify-center gap-2 text-black font-black uppercase text-[10px] tracking-widest">
+                      <Chrome size={16} />
+                      <span>Entrar com Google</span>
+                    </div>
+                  </button>
+                </div>
+
+                <div className="py-2 flex items-center gap-4">
+                  <div className="h-px flex-1 bg-white/5" />
+                  <span className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">OU</span>
+                  <div className="h-px flex-1 bg-white/5" />
+                </div>
+
+                <button
+                  onClick={() => handleLogin('anonymous')}
+                  className="group relative w-full h-14 overflow-hidden rounded-2xl transition-all active:scale-[0.98] border border-white/10 hover:bg-white/5"
+                  id="login-guest"
                 >
-                  <div className="grid grid-cols-2 gap-3 mb-3">
-                    <button
-                      onClick={handleLogin}
-                      disabled={isLoggingIn}
-                      className="group relative h-14 overflow-hidden rounded-2xl transition-all active:scale-[0.98] disabled:opacity-80 shadow-xl shadow-pink-500/5"
-                      id="login-google"
-                    >
-                      <div className="absolute inset-0 bg-white" />
-                      <div className="relative flex items-center justify-center gap-2 text-black font-black uppercase text-[10px] tracking-widest">
-                        <Chrome size={16} />
-                        <span>Google</span>
-                      </div>
-                    </button>
-
-                    <button
-                      onClick={handleLogin}
-                      disabled={isLoggingIn}
-                      className="group relative h-14 overflow-hidden rounded-2xl transition-all active:scale-[0.98] disabled:opacity-80"
-                      id="login-apple"
-                    >
-                      <div className="absolute inset-0 bg-zinc-800 border border-white/5" />
-                      <div className="relative flex items-center justify-center gap-2 text-white font-black uppercase text-[10px] tracking-widest">
-                        <Apple size={16} fill="currentColor" />
-                        <span>Apple ID</span>
-                      </div>
-                    </button>
+                  <div className="relative flex items-center justify-center gap-3 text-zinc-300 font-black uppercase text-xs tracking-widest">
+                    <UserCircle size={18} />
+                    <span>Entrar como Convidado</span>
                   </div>
-
-                  <button
-                    onClick={() => setLoginMethod('phone')}
-                    className="group relative w-full h-14 overflow-hidden rounded-2xl transition-all active:scale-[0.98]"
-                    id="login-phone"
-                  >
-                    <div className="absolute inset-0 bg-pink-600 shadow-[0_0_20px_rgba(219,39,119,0.3)]" />
-                    <div className="relative flex items-center justify-center gap-3 text-white font-black uppercase text-xs tracking-widest">
-                      <Phone size={18} />
-                      <span>Telefone</span>
-                    </div>
-                  </button>
-
-
-                  <div className="py-2 flex items-center gap-4">
-                    <div className="h-px flex-1 bg-white/5" />
-                    <span className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">OU</span>
-                    <div className="h-px flex-1 bg-white/5" />
-                  </div>
-
-                  <button
-                    onClick={() => alert("Login por e-mail em breve!")}
-                    className="group relative w-full h-14 overflow-hidden rounded-2xl transition-all active:scale-[0.98]"
-                    id="login-email"
-                  >
-                    <div className="absolute inset-0 bg-zinc-950/50 border border-white/10" />
-                    <div className="relative flex items-center justify-center gap-3 text-zinc-400 font-black uppercase text-xs tracking-widest">
-                      <Mail size={18} />
-                      <span>E-mail</span>
-                    </div>
-                  </button>
-                  
-                  <button
-                    onClick={handleLogin}
-                    className="group relative w-full overflow-hidden rounded-2xl transition-all active:scale-[0.98] mt-2"
-                    id="login-guest"
-                  >
-                    <div className="relative flex items-center justify-center gap-2 py-2 text-zinc-500 font-black uppercase text-[10px] tracking-[0.2em] hover:text-zinc-300 transition-colors">
-                      <UserCircle size={14} />
-                      <span>Convidado</span>
-                    </div>
-                  </button>
-                </motion.div>
-              ) : (
-                <motion.div 
-                  key="phone"
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
-                  className="space-y-6"
-                >
-                  <form onSubmit={handlePhoneSubmit} className="space-y-4">
-                    <div className="relative">
-                      <div className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 text-sm font-black italic">
-                        +55
-                      </div>
-                      <input 
-                        autoFocus
-                        type="tel"
-                        placeholder="(00) 00000-0000"
-                        value={phoneNumber}
-                        onChange={(e) => setPhoneNumber(e.target.value)}
-                        className="w-full bg-black/40 border border-white/10 rounded-2xl py-4 pl-14 pr-4 text-white font-bold tracking-widest placeholder:text-zinc-700 focus:border-pink-500/50 focus:outline-none transition-colors"
-                      />
-                    </div>
-                    
-                    <button
-                      type="submit"
-                      disabled={isLoggingIn || phoneNumber.length < 8}
-                      className="group relative w-full h-14 overflow-hidden rounded-2xl transition-all active:scale-[0.98] disabled:opacity-50"
-                    >
-                      <div className="absolute inset-0 bg-white" />
-                      <div className="relative flex items-center justify-center gap-3 text-black font-black uppercase text-xs tracking-[0.2em]">
-                        {isLoggingIn ? (
-                           <div className="w-4 h-4 border-2 border-zinc-200 border-t-black rounded-full animate-spin" />
-                        ) : (
-                          <span>Enviar Código</span>
-                        )}
-                      </div>
-                    </button>
-                  </form>
-
-                  <button 
-                    onClick={() => setLoginMethod('options')}
-                    className="flex items-center gap-2 text-zinc-500 hover:text-white transition-colors mx-auto text-[10px] font-black uppercase tracking-widest"
-                  >
-                    <ChevronLeft size={14} />
-                    Voltar para opções
-                  </button>
-                </motion.div>
-              )}
+                </button>
+              </motion.div>
             </AnimatePresence>
 
             {/* Footer Links */}
@@ -341,13 +256,15 @@ function AppContent() {
             transition={{ duration: 0.2 }}
             className="h-full"
           >
-            <Suspense fallback={<ViewLoader />}>
-              {activeTab === 'feed' && <Feed />}
-              {activeTab === 'match' && <Match />}
-              {activeTab === 'messages' && <Messages />}
-              {activeTab === 'profile' && <Profile />}
-              {activeTab === 'store' && <Store />}
-            </Suspense>
+            <ErrorBoundary>
+              <Suspense fallback={<ViewLoader />}>
+                {activeTab === 'feed' && <Feed />}
+                {activeTab === 'match' && <Match />}
+                {activeTab === 'messages' && <Messages />}
+                {activeTab === 'profile' && <Profile />}
+                {activeTab === 'store' && <Store />}
+              </Suspense>
+            </ErrorBoundary>
           </motion.div>
         </AnimatePresence>
       </main>
@@ -360,7 +277,9 @@ function AppContent() {
 export default function App() {
   return (
     <AuthProvider>
-      <AppContent />
+      <ToastProvider>
+        <AppContent />
+      </ToastProvider>
     </AuthProvider>
   );
 }

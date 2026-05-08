@@ -1,52 +1,121 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { collection, query, orderBy, limit, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../../services/firebase';
 import { useAuth } from '../../hooks/useAuth';
+import { useToast } from '../../hooks/useToast';
 import { VideoPost } from '../../types';
-import VideoCard from './VideoCard';
 import { motion, AnimatePresence } from 'motion/react';
-import { Loader2, Plus, Video, Image as ImageIcon, Radio, X, Upload, ChevronRight } from 'lucide-react';
+import { Loader2, Plus, Video, Image as ImageIcon, Radio, X, Upload, ChevronRight, VideoOff } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
 import { cn } from '../../lib/utils';
+import { compressVideo, getVideoDuration, compressImage } from '../../services/mediaService';
+
+// Lazy load VideoCard for better initial performance
+const VideoCard = lazy(() => import('./VideoCard'));
+
+// Placeholder component for lazy loading
+function VideoCardPlaceholder({ id }: { id?: string }) {
+  return (
+    <div className="h-full w-full snap-start relative bg-black flex flex-col items-center justify-center text-zinc-600 gap-4">
+      <div className="p-8 rounded-full bg-zinc-900/50 border border-white/5">
+        <VideoOff size={48} className="opacity-20 animate-pulse" />
+      </div>
+      <div className="text-center">
+        <p className="text-[10px] uppercase tracking-[0.2em] font-black mb-1 animate-pulse">Carregando...</p>
+        {id && <p className="text-[8px] text-zinc-500 font-mono opacity-50">CODE: {id.slice(0, 8)}</p>}
+      </div>
+    </div>
+  );
+}
+
+// Wrapper to only render VideoCard when it's near the viewport
+function LazyVideoCard({ video }: { video: VideoPost }) {
+  const [isVisible, setIsVisible] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Increase margin to preload earlier for smoother scrolling
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsVisible(entry.isIntersecting);
+      },
+      {
+        rootMargin: '1000px 0px', // Load 1-2 screens ahead
+        threshold: 0.01
+      }
+    );
+
+    const currentRef = containerRef.current;
+    if (currentRef) {
+      observer.observe(currentRef);
+    }
+
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div 
+      ref={containerRef} 
+      className="h-full w-full snap-start relative bg-black shrink-0"
+    >
+      <Suspense fallback={<VideoCardPlaceholder id={video.id} />}>
+        {isVisible ? <VideoCard video={video} /> : <VideoCardPlaceholder id={video.id} />}
+      </Suspense>
+    </div>
+  );
+}
 
 export default function Feed() {
-  const { user, profile } = useAuth();
+  const { user, profile, isQuotaExceeded } = useAuth();
+  const { toast } = useToast();
   const [videos, setVideos] = useState<VideoPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadType, setUploadType] = useState<'video' | 'photo' | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [uploadCaption, setUploadCaption] = useState('');
   const [previewFile, setPreviewFile] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const q = query(collection(db, 'videos'), orderBy('createdAt', 'desc'), limit(15));
+    setLoading(true);
+    
+    // Safety timeout for loading state
+    const loadingTimeout = setTimeout(() => {
+      setLoading(false);
+    }, 5000);
+
+    const q = query(collection(db, 'videos'), orderBy('createdAt', 'desc'), limit(20));
     
     const unsubscribe = onSnapshot(q, (snapshot) => {
+      clearTimeout(loadingTimeout);
       const allVideoData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as VideoPost[];
-      // Filter out known broken URLs and blob URLs from the local state
-      const validVideos = allVideoData.filter(v => 
-        v.videoUrl && 
-        !v.videoUrl.startsWith('blob:') &&
-        !v.videoUrl.includes('gtv-videos-bucket') &&
-        !v.videoUrl.includes('archive.org')
-      );
+      
+      // Basic validation to ensure we have a videoUrl
+      const validVideos = allVideoData.filter(v => !!v.videoUrl);
       
       setVideos(validVideos);
       setLoading(false);
       
-      // Seed if we have very few VALID videos and user is logged in
-      if (validVideos.length < 3 && user) {
-        seedVideos(user.uid, validVideos.map(v => v.videoUrl));
+      // Only seed if absolutely no videos exist in the collection
+      if (allVideoData.length === 0 && user && !isQuotaExceeded) {
+        seedVideos(user.uid, []);
       }
     }, (error) => {
+      clearTimeout(loadingTimeout);
       handleFirestoreError(error, OperationType.LIST, 'videos');
+      setLoading(false);
     });
 
-    return () => unsubscribe();
-  }, [user]);
+    return () => {
+      unsubscribe();
+      clearTimeout(loadingTimeout);
+    };
+  }, [user, isQuotaExceeded]);
 
   const seedVideos = async (userId: string, existingUrls: string[]) => {
     const path = 'videos';
@@ -141,56 +210,21 @@ export default function Feed() {
         type: uploadType
       });
 
-      setIsUploading(false);
-      setShowUploadModal(false);
-      setPreviewFile(null);
-      setUploadCaption('');
-      alert(`${uploadType === 'video' ? 'Vídeo' : 'Foto'} publicado com sucesso!`);
+      setIsSuccess(true);
+      toast('success', `${uploadType === 'video' ? 'Vídeo' : 'Foto'} publicado com sucesso!`);
+      
+      // Close modal after a short delay to show success state
+      setTimeout(() => {
+        setIsUploading(false);
+        setIsSuccess(false);
+        setShowUploadModal(false);
+        setPreviewFile(null);
+        setUploadCaption('');
+      }, 2000);
     } catch (err) {
       setIsUploading(false);
       handleFirestoreError(err, OperationType.CREATE, 'videos');
     }
-  };
-
-  const compressImage = (base64Str: string): Promise<string> => {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.src = base64Str;
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        // Accept any resolution, but scale down if it exceeds reasonable bounds to prevent browser crashes
-        const MAX_DIMENSION = 1600; 
-        let width = img.width;
-        let height = img.height;
-
-        if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
-          if (width > height) {
-            height *= MAX_DIMENSION / width;
-            width = MAX_DIMENSION;
-          } else {
-            width *= MAX_DIMENSION / height;
-            height = MAX_DIMENSION;
-          }
-        }
-        
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0, width, height);
-        
-        // Dynamic quality adjustment to ensure we stay under ~900KB Base64 (~675KB binary)
-        let quality = 0.8;
-        let result = canvas.toDataURL('image/jpeg', quality);
-        
-        // Loop to reduce quality until it fits
-        while (result.length > 900000 && quality > 0.1) {
-          quality -= 0.1;
-          result = canvas.toDataURL('image/jpeg', quality);
-        }
-        
-        resolve(result);
-      };
-    });
   };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -200,46 +234,111 @@ export default function Feed() {
       if (acceptedFiles.length > 0) {
         const file = acceptedFiles[0];
         
-        // Slightly higher limit: ~750KB binary (roughly 1MB in Base64)
-        if (uploadType === 'video' && file.size > 750000) {
-          alert('Este vídeo é muito grande. Optimize-o ou reduza a duração antes de publicar.');
-          setPreviewFile('https://player.vimeo.com/external/370331493.sd.mp4?s=2907373ae13977a493fb0efeb986381005a761e2&profile_id=139&oauth2_token_id=57447761');
+        if (uploadType === 'video') {
+          // Check duration first
+          const duration = await getVideoDuration(file);
+          if (duration > 32) { // 2s grace
+            toast('error', 'O vídeo excedeu o limite de 30 segundos. Por favor, corte-o.');
+            return;
+          }
+
+          setIsProcessing(true);
+          setUploadProgress(0);
+          try {
+            toast('info', 'Processando seu vídeo...');
+            const compressed = await compressVideo(file, (progress) => {
+              setUploadProgress(Math.round(progress));
+            });
+            
+            // Check final size (Firestore ~1MB limit)
+            if (compressed.length > 1300000) { // ~975KB binary
+              toast('warning', 'O vídeo ainda está um pouco grande. Tente um vídeo mais curto se o upload falhar.');
+            }
+            
+            setPreviewFile(compressed);
+            toast('success', 'Vídeo pronto para publicar!');
+          } catch (err) {
+            console.error("Compression failed:", err);
+            toast('warning', 'Processamento falhou. Tentando upload direto...');
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              setPreviewFile(reader.result as string);
+              setIsProcessing(false);
+            };
+            reader.readAsDataURL(file);
+            return; // Exit here as reader handles it
+          } finally {
+            setIsProcessing(false);
+            setUploadProgress(0);
+          }
           return;
         }
 
+        // For photos or small fallback
         const reader = new FileReader();
+        reader.onprogress = (e) => {
+          if (e.lengthComputable) {
+            setUploadProgress(Math.round((e.loaded / e.total) * 100));
+          }
+        };
+        reader.onloadstart = () => setIsProcessing(true);
         reader.onloadend = async () => {
           const result = reader.result as string;
           if (uploadType === 'photo') {
-            const compressed = await compressImage(result);
-            setPreviewFile(compressed);
+            try {
+              const compressed = await compressImage(result);
+              setPreviewFile(compressed);
+            } catch (err) {
+              setPreviewFile(result);
+            }
           } else {
             setPreviewFile(result);
           }
+          setIsProcessing(false);
+          setUploadProgress(0);
         };
         reader.readAsDataURL(file);
       }
     }
   });
 
-  if (loading) {
+  if (loading && videos.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 className="animate-spin text-pink-500" size={32} />
+      <div className="flex flex-col items-center justify-center h-full bg-black">
+        <Loader2 className="animate-spin text-pink-500 mb-4" size={40} />
+        <p className="text-[10px] font-black text-pink-500/50 uppercase tracking-[0.3em] animate-pulse">Sincronizando Feed...</p>
       </div>
     );
   }
 
   return (
-    <div className="relative h-full">
-      <div 
-        className="h-full overflow-y-scroll snap-y snap-mandatory no-scrollbar"
-        ref={scrollRef}
-      >
-        {videos.map((video) => (
-          <VideoCard key={video.id} video={video} />
-        ))}
-      </div>
+    <div className="relative h-full bg-black">
+      {videos.length > 0 ? (
+        <div 
+          className="h-full overflow-y-scroll snap-y snap-mandatory no-scrollbar"
+          ref={scrollRef}
+        >
+          {videos.map((video) => (
+            <LazyVideoCard key={video.id} video={video} />
+          ))}
+        </div>
+      ) : (
+        <div className="h-full flex flex-col items-center justify-center p-12 text-center text-zinc-600 gap-6">
+          <div className="p-8 rounded-full bg-zinc-900/50 border border-white/5">
+            <Video size={48} className="opacity-20" />
+          </div>
+          <div>
+            <h3 className="text-white font-black italic uppercase tracking-tighter text-xl mb-2">Nada por aqui...</h3>
+            <p className="text-sm font-medium leading-relaxed max-w-[200px] mx-auto">Não encontramos vídeos no feed. Tente novamente mais tarde.</p>
+          </div>
+          <button 
+            onClick={() => window.location.reload()}
+            className="px-8 py-3 bg-white/5 border border-white/10 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-white/10 transition-all active:scale-95"
+          >
+            Actualizar Página
+          </button>
+        </div>
+      )}
 
       {/* Floating Create Menu */}
       <div className="absolute bottom-6 right-6 z-40">
@@ -310,24 +409,66 @@ export default function Feed() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {!previewFile ? (
+              {isSuccess ? (
+                <div className="flex-1 flex flex-col items-center justify-center space-y-8">
+                  <motion.div 
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1, rotate: [0, 10, 0] }}
+                    className="w-32 h-32 bg-green-500 rounded-full flex items-center justify-center shadow-[0_0_50px_rgba(34,197,94,0.4)]"
+                  >
+                    <motion.div
+                      initial={{ pathLength: 0 }}
+                      animate={{ pathLength: 1 }}
+                      transition={{ duration: 0.5, delay: 0.2 }}
+                    >
+                      <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    </motion.div>
+                  </motion.div>
+                  <div className="text-center">
+                    <h3 className="text-2xl font-black italic uppercase tracking-tighter mb-2">Publicado!</h3>
+                    <p className="text-zinc-500 font-medium">Seu conteúdo já está no feed internacional.</p>
+                  </div>
+                </div>
+              ) : !previewFile ? (
                 <div 
                   {...getRootProps()} 
                   className={cn(
-                    "border-2 border-dashed rounded-[2.5rem] p-12 flex flex-col items-center justify-center text-center transition-all cursor-pointer aspect-square bg-zinc-950/50",
+                    "border-2 border-dashed rounded-[2.5rem] p-12 flex flex-col items-center justify-center text-center transition-all cursor-pointer aspect-square bg-zinc-950/50 relative overflow-hidden",
                     isDragActive ? "border-pink-500 bg-pink-500/5" : "border-zinc-800 hover:border-zinc-700"
                   )}
                 >
                   <input {...getInputProps()} />
-                  <div className="w-24 h-24 bg-zinc-900 rounded-3xl flex items-center justify-center mb-6 shadow-xl">
-                    <Upload size={40} className="text-zinc-500" />
-                  </div>
-                  <p className="text-lg font-black mb-2 italic">
-                    {isDragActive ? 'Solte para Publicar' : `Escolha seu ${uploadType === 'video' ? 'Vídeo' : 'Foto'}`}
-                  </p>
-                  <p className="text-sm text-zinc-600 font-medium">
-                    Toque para abrir a sua galeria
-                  </p>
+                  
+                  {isProcessing ? (
+                    <div className="flex flex-col items-center z-10 w-full px-6">
+                      <div className="w-20 h-20 bg-pink-500/10 rounded-3xl flex items-center justify-center mb-6 shadow-xl border border-pink-500/20">
+                        <Loader2 size={40} className="text-pink-500 animate-spin" />
+                      </div>
+                      <p className="text-lg font-black mb-2 italic">A Processar...</p>
+                      <div className="w-full h-2 bg-zinc-900 rounded-full overflow-hidden mt-4">
+                        <motion.div 
+                          initial={{ width: 0 }}
+                          animate={{ width: `${uploadProgress}%` }}
+                          className="h-full bg-pink-500"
+                        />
+                      </div>
+                      <p className="text-[10px] text-zinc-500 font-bold mt-2 uppercase tracking-widest">{uploadProgress}% concluído</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="w-24 h-24 bg-zinc-900 rounded-3xl flex items-center justify-center mb-6 shadow-xl">
+                        <Upload size={40} className="text-zinc-500" />
+                      </div>
+                      <p className="text-lg font-black mb-2 italic">
+                        {isDragActive ? 'Solte para Publicar' : `Escolha seu ${uploadType === 'video' ? 'Vídeo' : 'Foto'}`}
+                      </p>
+                      <p className="text-sm text-zinc-600 font-medium">
+                        Toque para abrir a sua galeria
+                      </p>
+                    </>
+                  )}
                 </div>
               ) : (
                 <div className="space-y-8">
@@ -369,12 +510,20 @@ export default function Feed() {
                     onClick={handlePublish}
                     disabled={isUploading}
                     className={cn(
-                      "w-full py-5 rounded-2xl font-black uppercase tracking-widest text-sm shadow-xl active:scale-95 transition-all flex items-center justify-center gap-3",
+                      "w-full py-5 rounded-2xl font-black uppercase tracking-widest text-sm shadow-xl active:scale-95 transition-all flex items-center justify-center gap-3 relative overflow-hidden",
                       isUploading 
                         ? "bg-zinc-800 text-zinc-500 cursor-not-allowed" 
                         : "bg-gradient-to-tr from-pink-600 to-blue-600 text-white shadow-pink-600/20"
                     )}
                   >
+                    {isUploading && (
+                      <motion.div 
+                        initial={{ x: '-100%' }}
+                        animate={{ x: '100%' }}
+                        transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+                        className="absolute inset-0 bg-white/10"
+                      />
+                    )}
                     {isUploading ? (
                       <>
                         <Loader2 size={24} className="animate-spin" />

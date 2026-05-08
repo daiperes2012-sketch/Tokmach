@@ -3,6 +3,7 @@ import { X, Camera, Mic, MicOff, VideoOff, Video, Send, Users, Heart, Share2, Me
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../../lib/utils';
 import { useAuth } from '../../hooks/useAuth';
+import { useToast } from '../../hooks/useToast';
 import { collection, addDoc, serverTimestamp, deleteDoc, doc, onSnapshot } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../../services/firebase';
 
@@ -27,6 +28,7 @@ export default function LiveBroadcast({ onClose }: { onClose: () => void }) {
 
   const commonEmojis = ['❤️', '🔥', '👏', '🙌', '😍', '✨', '😂', '💯', '🙏', '🎉', '🌟', '💎', '🚀', '👑', '🌈'];
   const { profile, user } = useAuth();
+  const { toast } = useToast();
 
   const colors = ['text-blue-400', 'text-pink-400', 'text-yellow-400', 'text-green-400', 'text-purple-400'];
 
@@ -62,7 +64,7 @@ export default function LiveBroadcast({ onClose }: { onClose: () => void }) {
       setStream(mediaStream);
     } catch (err) {
       console.error('Error accessing camera:', err);
-      alert('Não foi possível acessar a câmera. Verifique as permissões.');
+      toast('error', 'Não foi possível acessar a câmera. Verifique as permissões.');
       onClose();
     }
   };
@@ -82,8 +84,11 @@ export default function LiveBroadcast({ onClose }: { onClose: () => void }) {
         creatorId: user.uid,
         creatorName: profile.displayName,
         creatorPhoto: profile.photoURL,
-        title: `${profile.displayName} está AO VIVO!`,
+        title: `${profile.displayName} está AO VIVO! 👋`,
         viewerCount: 0,
+        tags: ['Geral', 'Novo'],
+        thumbnailUrl: profile.photoURL || 'https://images.pexels.com/photos/1036622/pexels-photo-1036622.jpeg?auto=compress&cs=tinysrgb&w=1280',
+        streamUrl: 'https://www.w3schools.com/html/mov_bbb.mp4', // Local demo stream
         createdAt: serverTimestamp(),
         status: 'online'
       });
@@ -146,7 +151,7 @@ export default function LiveBroadcast({ onClose }: { onClose: () => void }) {
       {/* Header */}
       <div className="relative p-6 flex justify-between items-start z-10 pt-12">
         <div className="flex items-center gap-3 bg-black/40 backdrop-blur-xl p-2 pr-4 rounded-full border border-white/10">
-          <img src={profile?.photoURL} className="w-10 h-10 rounded-full border-2 border-pink-500" />
+          <img src={profile?.photoURL || undefined} className="w-10 h-10 rounded-full border-2 border-pink-500" />
           <div>
             <p className="text-white text-sm font-bold leading-none">{profile?.displayName}</p>
             <div className="flex items-center gap-1.5 mt-1">

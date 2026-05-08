@@ -1,6 +1,7 @@
 import { motion } from 'motion/react';
 import { Coins, Zap, Flame, Heart, Gift, ShoppingBag, CreditCard, Star } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
+import { useToast } from '../../hooks/useToast';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -10,6 +11,7 @@ function cn(...inputs: ClassValue[]) {
 
 export default function Store() {
   const { profile, updateProfile } = useAuth();
+  const { toast } = useToast();
 
   const coinPackages = [
     { coins: 50, price: 'R$ 4,90', icon: Zap, color: 'text-blue-400' },
@@ -30,7 +32,7 @@ export default function Store() {
     if (!profile) return;
     const newBalance = (profile.balance || 0) + amount;
     await updateProfile({ balance: newBalance });
-    alert(`Sucesso! Você recebeu ${amount} moedas.`);
+    toast('success', `Sucesso! Você recebeu ${amount} moedas.`);
   };
 
   return (

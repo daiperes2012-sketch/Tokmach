@@ -29,22 +29,28 @@ import {
   MoreHorizontal
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AgeVerification } from '../auth/AgeVerification';
 import LiveBroadcast from '../match/LiveBroadcast';
 import { useDropzone } from 'react-dropzone';
 import { collection, addDoc, serverTimestamp, query, where, onSnapshot, orderBy, getDocs, doc, documentId } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../../services/firebase';
+import { useToast } from '../../hooks/useToast';
+import { compressVideo, getVideoDuration, compressImage } from '../../services/mediaService';
+import CameraModal from './CameraModal';
 
 export default function Profile() {
   const { profile, user, logout, updateProfile, deleteAccount } = useAuth();
+  const { toast, confirm: appConfirm } = useToast();
   const [isEditing, setIsEditing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [showAgeVerification, setShowAgeVerification] = useState(false);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showLiveBroadcast, setShowLiveBroadcast] = useState(false);
+  const [showCamera, setShowCamera] = useState(false);
   const [uploadType, setUploadType] = useState<'video' | 'photo' | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [uploadCaption, setUploadCaption] = useState('');
   const [previewFile, setPreviewFile] = useState<string | null>(null);
   const [userVideos, setUserVideos] = useState<any[]>([]);
@@ -99,46 +105,6 @@ export default function Profile() {
       setHasUnsavedChanges(changed);
     }
   }, [editName, editBio, editPhotoURL, editCoverURL, profile, isEditing]);
-
-  const compressImage = (base64Str: string): Promise<string> => {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.src = base64Str;
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        // Accept any resolution, but scale down if it exceeds bounds to prevent crash
-        const MAX_DIMENSION = 1600; 
-        let width = img.width;
-        let height = img.height;
-
-        if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
-          if (width > height) {
-            height *= MAX_DIMENSION / width;
-            width = MAX_DIMENSION;
-          } else {
-            width *= MAX_DIMENSION / height;
-            height = MAX_DIMENSION;
-          }
-        }
-        
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0, width, height);
-        
-        // Dynamic quality adjustment to ensure we stay under ~900KB Base64
-        let quality = 0.8;
-        let result = canvas.toDataURL('image/jpeg', quality);
-        
-        while (result.length > 900000 && quality > 0.1) {
-          quality -= 0.1;
-          result = canvas.toDataURL('image/jpeg', quality);
-        }
-        
-        resolve(result);
-      };
-    });
-  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'profile' | 'cover') => {
     const file = e.target.files?.[0];
@@ -276,22 +242,68 @@ export default function Profile() {
       if (acceptedFiles.length > 0) {
         const file = acceptedFiles[0];
         
-        // Video limit: ~750KB binary
-        if (uploadType === 'video' && file.size > 750000) {
-          alert('Este vídeo é muito grande. Optimize-o ou reduza a duração antes de publicar.');
-          setPreviewFile('https://player.vimeo.com/external/370331493.sd.mp4?s=2907373ae13977a493fb0efeb986381005a761e2&profile_id=139&oauth2_token_id=57447761');
+        if (uploadType === 'video') {
+          // Check duration first
+          const duration = await getVideoDuration(file);
+          if (duration > 32) { // 2s grace
+            toast('error', 'O vídeo excedeu o limite de 30 segundos. Por favor, corte-o.');
+            return;
+          }
+
+          setIsProcessing(true);
+          setUploadProgress(0);
+          try {
+            toast('info', 'Processando seu vídeo...');
+            const compressed = await compressVideo(file, (progress) => {
+              setUploadProgress(Math.round(progress));
+            });
+            
+            // Check final size (Firestore ~1MB limit)
+            if (compressed.length > 1300000) { // ~975KB binary
+              toast('warning', 'O vídeo ainda está um pouco grande. Tente um vídeo mais curto se o upload falhar.');
+            }
+            
+            setPreviewFile(compressed);
+            toast('success', 'Vídeo pronto para publicar!');
+          } catch (err) {
+            console.error("Compression failed:", err);
+            toast('warning', 'Processamento falhou. Tentando upload direto...');
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              setPreviewFile(reader.result as string);
+              setIsProcessing(false);
+            };
+            reader.readAsDataURL(file);
+            return; // Exit here as reader handles it
+          } finally {
+            setIsProcessing(false);
+            setUploadProgress(0);
+          }
           return;
         }
 
+        // For photos or small fallback
         const reader = new FileReader();
+        reader.onprogress = (e) => {
+          if (e.lengthComputable) {
+            setUploadProgress(Math.round((e.loaded / e.total) * 100));
+          }
+        };
+        reader.onloadstart = () => setIsProcessing(true);
         reader.onloadend = async () => {
           const result = reader.result as string;
           if (uploadType === 'photo') {
-            const compressed = await compressImage(result);
-            setPreviewFile(compressed);
+            try {
+              const compressed = await compressImage(result);
+              setPreviewFile(compressed);
+            } catch (err) {
+              setPreviewFile(result);
+            }
           } else {
             setPreviewFile(result);
           }
+          setIsProcessing(false);
+          setUploadProgress(0);
         };
         reader.readAsDataURL(file);
       }
@@ -326,20 +338,33 @@ export default function Profile() {
         type: uploadType
       });
 
-      setIsUploading(false);
-      setShowUploadModal(false);
-      setPreviewFile(null);
-      setUploadCaption('');
-      alert(`${uploadType === 'video' ? 'Vídeo' : 'Foto'} publicado com sucesso!`);
+      setIsSuccess(true);
+      toast('success', `${uploadType === 'video' ? 'Vídeo' : 'Foto'} publicado com sucesso!`);
+      
+      // Close modal after delay to show success
+      setTimeout(() => {
+        setIsUploading(false);
+        setIsSuccess(false);
+        setShowUploadModal(false);
+        setPreviewFile(null);
+        setUploadCaption('');
+      }, 2000);
     } catch (err) {
       setIsUploading(false);
       handleFirestoreError(err, OperationType.CREATE, 'videos');
     }
   };
 
+  const handleCameraCapture = (dataUrl: string, type: 'photo' | 'video') => {
+    setUploadType(type);
+    setPreviewFile(dataUrl);
+    setShowUploadModal(true);
+    setShowCamera(false);
+  };
+
   const handleSave = async () => {
     if (!editName.trim()) {
-      alert("O nome não pode estar vazio.");
+      toast('error', "O nome não pode estar vazio.");
       return;
     }
     
@@ -355,10 +380,14 @@ export default function Profile() {
 
   const handleCancelEdit = () => {
     if (hasUnsavedChanges) {
-      if (confirm("Tens alterações não guardadas. Desejas descartar as alterações?")) {
-        setIsEditing(false);
-        setHasUnsavedChanges(false);
-      }
+      appConfirm({
+        title: "Alterações não guardadas",
+        message: "Desejas descartar as alterações?",
+        onConfirm: () => {
+          setIsEditing(false);
+          setHasUnsavedChanges(false);
+        }
+      });
     } else {
       setIsEditing(false);
     }
@@ -380,18 +409,23 @@ export default function Profile() {
         <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/20" />
       </div>
 
-      {/* Header */}
-      <div className="sticky top-0 bg-black/40 backdrop-blur-md z-20 px-6 py-4 flex justify-between items-center border-b border-white/5 -mt-48">
-        <div className="flex items-center gap-2">
-          <h2 className="text-xl font-bold tracking-tight">{profile.displayName}</h2>
-          {profile.ageVerified && (
-            <CheckCircle2 size={16} className="text-blue-500 fill-blue-500/10" />
-          )}
+        {/* Header */}
+        <div className="sticky top-0 bg-black/40 backdrop-blur-md z-20 px-6 py-4 flex justify-between items-center border-b border-white/5 -mt-48">
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-bold tracking-tight">{profile.displayName}</h2>
+          </div>
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => setShowCamera(true)} 
+              className="p-2 hover:bg-white/10 rounded-full transition-colors text-pink-500"
+            >
+              <Camera size={22} />
+            </button>
+            <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+              <Settings size={22} />
+            </button>
+          </div>
         </div>
-        <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
-          <Settings size={22} />
-        </button>
-      </div>
 
       {/* Profile Info */}
       <div className="px-6 pt-16 pb-8 flex flex-col items-center relative">
@@ -402,11 +436,6 @@ export default function Profile() {
               alt="Profile" 
               className="w-full h-full rounded-[2.25rem] object-cover"
             />
-            {profile.ageVerified && (
-              <div className="absolute inset-x-0 bottom-0 h-1/3 bg-blue-500/20 backdrop-blur-sm flex items-center justify-center border-t border-blue-500/30">
-                <Shield size={16} className="text-blue-400" />
-              </div>
-            )}
           </div>
           <button 
             onClick={() => setIsEditing(true)}
@@ -418,25 +447,12 @@ export default function Profile() {
 
         <h1 className="text-xl font-bold mb-1 flex items-center gap-2">
           @{user?.uid.slice(0, 8)}
-          {profile.ageVerified && (
-             <span className="text-[10px] bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full border border-blue-500/30 uppercase tracking-tighter font-black">Verificado +18</span>
-          )}
         </h1>
         
         <div className="flex flex-wrap items-center justify-center gap-2 mb-6">
           <div className="flex items-center gap-1.5 bg-yellow-500/10 px-3 py-1 rounded-full border border-yellow-500/20">
             <span className="text-yellow-500 font-bold text-xs">{(profile as any).balance || 0} Moedas</span>
           </div>
-          
-          {!profile.ageVerified && (
-            <button 
-              onClick={() => setShowAgeVerification(true)}
-              className="flex items-center gap-1.5 bg-white/5 px-3 py-1 rounded-full border border-white/10 hover:bg-white/10 transition-colors"
-            >
-              <Camera size={12} className="text-zinc-400" />
-              <span className="text-zinc-400 font-bold text-xs">Verificar Idade</span>
-            </button>
-          )}
         </div>
         <p className="text-zinc-500 text-sm mb-6 px-12 text-center leading-relaxed">
           {profile.bio || "Adicione uma bio para as pessoas te conhecerem melhor."}
@@ -744,10 +760,6 @@ export default function Profile() {
                 color="bg-red-600" 
                 delay={0}
                 onClick={() => {
-                  if (!profile?.ageVerified) {
-                    setShowAgeVerification(true);
-                    return;
-                  }
                   setShowCreateMenu(false);
                   setShowLiveBroadcast(true);
                 }}
@@ -816,24 +828,66 @@ export default function Profile() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {!previewFile ? (
+              {isSuccess ? (
+                <div className="flex-1 flex flex-col items-center justify-center space-y-8">
+                  <motion.div 
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1, rotate: [0, 10, 0] }}
+                    className="w-32 h-32 bg-green-500 rounded-full flex items-center justify-center shadow-[0_0_50px_rgba(34,197,94,0.4)]"
+                  >
+                    <motion.div
+                      initial={{ pathLength: 0 }}
+                      animate={{ pathLength: 1 }}
+                      transition={{ duration: 0.5, delay: 0.2 }}
+                    >
+                      <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    </motion.div>
+                  </motion.div>
+                  <div className="text-center">
+                    <h3 className="text-2xl font-black italic uppercase tracking-tighter mb-2">Publicado!</h3>
+                    <p className="text-zinc-500 font-medium">Seu conteúdo já está no seu perfil e no feed.</p>
+                  </div>
+                </div>
+              ) : !previewFile ? (
                 <div 
                   {...getRootProps()} 
                   className={cn(
-                    "border-2 border-dashed rounded-[2.5rem] p-12 flex flex-col items-center justify-center text-center transition-all cursor-pointer aspect-square bg-zinc-950/50",
+                    "border-2 border-dashed rounded-[2.5rem] p-12 flex flex-col items-center justify-center text-center transition-all cursor-pointer aspect-square bg-zinc-950/50 relative overflow-hidden",
                     isDragActive ? "border-pink-500 bg-pink-500/5" : "border-zinc-800 hover:border-zinc-700"
                   )}
                 >
                   <input {...getInputProps()} />
-                  <div className="w-24 h-24 bg-zinc-900 rounded-3xl flex items-center justify-center mb-6 shadow-xl">
-                    <Upload size={40} className="text-zinc-500" />
-                  </div>
-                  <p className="text-lg font-black mb-2 italic">
-                    {isDragActive ? 'Solte para Publicar' : `Escolha seu ${uploadType === 'video' ? 'Vídeo' : 'Foto'}`}
-                  </p>
-                  <p className="text-sm text-zinc-600 font-medium">
-                    Toque para abrir a sua galeria
-                  </p>
+                  
+                  {isProcessing ? (
+                    <div className="flex flex-col items-center z-10 w-full px-6">
+                      <div className="w-20 h-20 bg-pink-500/10 rounded-3xl flex items-center justify-center mb-6 shadow-xl border border-pink-500/20">
+                        <Loader2 size={40} className="text-pink-500 animate-spin" />
+                      </div>
+                      <p className="text-lg font-black mb-2 italic">A Processar...</p>
+                      <div className="w-full h-2 bg-zinc-900 rounded-full overflow-hidden mt-4">
+                        <motion.div 
+                          initial={{ width: 0 }}
+                          animate={{ width: `${uploadProgress}%` }}
+                          className="h-full bg-pink-500"
+                        />
+                      </div>
+                      <p className="text-[10px] text-zinc-500 font-bold mt-2 uppercase tracking-widest">{uploadProgress}% concluído</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="w-24 h-24 bg-zinc-900 rounded-3xl flex items-center justify-center mb-6 shadow-xl">
+                        <Upload size={40} className="text-zinc-500" />
+                      </div>
+                      <p className="text-lg font-black mb-2 italic">
+                        {isDragActive ? 'Solte para Publicar' : `Escolha seu ${uploadType === 'video' ? 'Vídeo' : 'Foto'}`}
+                      </p>
+                      <p className="text-sm text-zinc-600 font-medium">
+                        Toque para abrir a sua galeria
+                      </p>
+                    </>
+                  )}
                 </div>
               ) : (
                 <div className="space-y-8">
@@ -883,12 +937,20 @@ export default function Profile() {
                     onClick={handlePublish}
                     disabled={isUploading}
                     className={cn(
-                      "w-full py-5 rounded-2xl font-black uppercase tracking-widest text-sm shadow-xl active:scale-95 transition-all flex items-center justify-center gap-3",
+                      "w-full py-5 rounded-2xl font-black uppercase tracking-widest text-sm shadow-xl active:scale-95 transition-all flex items-center justify-center gap-3 relative overflow-hidden",
                       isUploading 
                         ? "bg-zinc-800 text-zinc-500 cursor-not-allowed" 
                         : "bg-gradient-to-tr from-pink-600 to-blue-600 text-white shadow-pink-600/20"
                     )}
                   >
+                    {isUploading && (
+                      <motion.div 
+                        initial={{ x: '-100%' }}
+                        animate={{ x: '100%' }}
+                        transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+                        className="absolute inset-0 bg-white/10"
+                      />
+                    )}
                     {isUploading ? (
                       <>
                         <Loader2 size={24} className="animate-spin" />
@@ -982,7 +1044,7 @@ export default function Profile() {
                   />
                   <div className="w-full h-full rounded-[3.5rem] border-8 border-black bg-zinc-900 p-1 overflow-hidden shadow-2xl relative">
                     <img 
-                      src={editPhotoURL} 
+                      src={editPhotoURL || undefined} 
                       className="w-full h-full rounded-[3.1rem] object-cover transition-transform duration-500 group-hover:scale-110" 
                       alt="Edit Profile"
                     />
@@ -1148,7 +1210,7 @@ export default function Profile() {
                   <SettingItem icon={Bell} label="Notificações" onClick={() => {
                     const notify = async () => {
                       const res = await Notification.requestPermission();
-                      alert(res === 'granted' ? 'Notificações ativadas!' : 'Permissão negada.');
+                      toast(res === 'granted' ? 'success' : 'error', res === 'granted' ? 'Notificações ativadas!' : 'Permissão negada.');
                     };
                     notify();
                   }} />
@@ -1166,9 +1228,13 @@ export default function Profile() {
                     label="Eliminar Conta" 
                     textColor="text-red-500" 
                     onClick={() => {
-                      if(confirm("Tem certeza que deseja eliminar sua conta? Esta ação é irreversível.")) {
-                        deleteAccount();
-                      }
+                      appConfirm({
+                        title: "Eliminar Conta",
+                        message: "Tem certeza que deseja eliminar sua conta? Esta ação é irreversível.",
+                        isDanger: true,
+                        confirmText: "Eliminar",
+                        onConfirm: () => deleteAccount()
+                      });
                     }} 
                   />
                 </div>
@@ -1187,21 +1253,18 @@ export default function Profile() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {showAgeVerification && (
-          <AgeVerification 
-            onSuccess={() => setShowAgeVerification(false)}
-            onCancel={() => setShowAgeVerification(false)}
-          />
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
         {showLiveBroadcast && (
           <LiveBroadcast 
             onClose={() => setShowLiveBroadcast(false)}
           />
         )}
       </AnimatePresence>
+
+      <CameraModal 
+        isOpen={showCamera}
+        onClose={() => setShowCamera(false)}
+        onCapture={handleCameraCapture}
+      />
     </div>
   );
 }
@@ -1256,14 +1319,14 @@ function VideoThumbnail({ vid, onClick }: { vid: any, onClick: () => void }) {
         </div>
       ) : isPhoto ? (
         <img 
-          src={vid.videoUrl} 
+          src={vid.videoUrl || undefined} 
           className="w-full h-full object-cover opacity-60"
           onError={() => setHasError(true)}
         />
       ) : (
         <video 
           key={vid.videoUrl}
-          src={vid.videoUrl} 
+          src={vid.videoUrl || undefined} 
           className="w-full h-full object-cover opacity-60"
           muted
           playsInline

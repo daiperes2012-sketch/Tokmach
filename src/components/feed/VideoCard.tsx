@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, memo } from 'react';
 import { VideoPost, VideoComment } from '../../types';
 import { Flame, MessageCircle, Share2, Music2, UserPlus, VideoOff, Send, X, Loader2, MoreVertical, Trash2, Edit3, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -17,9 +17,11 @@ import {
   where,
   increment, 
   doc, 
-  updateDoc 
+  updateDoc,
+  setDoc
 } from 'firebase/firestore';
 import { useAuth } from '../../hooks/useAuth';
+import { useToast } from '../../hooks/useToast';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -29,8 +31,9 @@ interface VideoCardProps {
   video: VideoPost;
 }
 
-export default function VideoCard({ video }: VideoCardProps) {
+const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
   const { user, profile } = useAuth();
+  const { toast } = useToast();
   const [playing, setPlaying] = useState(false);
   const [liked, setLiked] = useState(false);
   const [hasError, setHasError] = useState(false);
@@ -43,57 +46,45 @@ export default function VideoCard({ video }: VideoCardProps) {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [editDescription, setEditDescription] = useState(video.description || '');
+  // Presence and focus tracking
+  const [hasStartedLoading, setHasStartedLoading] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const isOwner = user?.uid === video.creatorId;
 
-  // Check if user has liked this video - Only when card is visible or near visible
-  const [hasCheckedLike, setHasCheckedLike] = useState(false);
-  const [isVisible, setIsVisible] = useState(false);
-
+  // Check if user has liked this video - Only when card is near visible
   useEffect(() => {
-    if (!user || !video.id || !isVisible || hasCheckedLike) return;
+    if (!user || !video.id || !hasStartedLoading) return;
     
-    const q = query(
-      collection(db, 'likes'),
-      where('userId', '==', user.uid),
-      where('videoId', '==', video.id)
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setLiked(!snapshot.empty);
-      setHasCheckedLike(true);
+    // Check if user has liked this video - using specific ID for efficiency
+    const likeDocRef = doc(db, 'likes', `${user.uid}_${video.id}`);
+    
+    const unsubscribe = onSnapshot(likeDocRef, (snapshot) => {
+      setLiked(snapshot.exists());
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'likes');
+      handleFirestoreError(error, OperationType.GET, `likes/${user.uid}_${video.id}`);
     });
 
     return () => unsubscribe();
-  }, [user, video.id, isVisible, hasCheckedLike]);
+  }, [user, video.id, hasStartedLoading]);
 
   const toggleLike = async () => {
     if (!user || !video.id) return;
 
+    const likeDocRef = doc(db, 'likes', `${user.uid}_${video.id}`);
+    
     try {
-      const q = query(
-        collection(db, 'likes'),
-        where('userId', '==', user.uid),
-        where('videoId', '==', video.id)
-      );
-      
-      const snapshot = await getDocs(q);
-      
-      if (!snapshot.empty) {
-        // Unlike: delete all matching like docs (should be only one)
-        for (const likedDoc of snapshot.docs) {
-          await deleteDoc(doc(db, 'likes', likedDoc.id));
-        }
+      if (liked) {
+        // Unlike: delete the specific like doc
+        await deleteDoc(likeDocRef);
         // Decrement like count
         await updateDoc(doc(db, 'videos', video.id), {
           likesCount: increment(-1)
         });
       } else {
-        // Like: create like doc
-        await addDoc(collection(db, 'likes'), {
+        // Like: create like doc with specific ID
+        await setDoc(likeDocRef, {
           userId: user.uid,
           videoId: video.id,
           createdAt: serverTimestamp()
@@ -119,19 +110,21 @@ export default function VideoCard({ video }: VideoCardProps) {
     }
   };
 
+  const [confirmingAction, setConfirmingAction] = useState<'delete' | 'delete-comment' | null>(null);
+  const [targetCommentId, setTargetCommentId] = useState<string | null>(null);
+
   const handleDelete = async () => {
     if (!video.id || isDeleting) return;
-    if (!window.confirm("Tem certeza que deseja excluir este vídeo?")) return;
-
+    
     setIsDeleting(true);
     try {
       await deleteDoc(doc(db, 'videos', video.id));
-      // No need to show success message, onSnapshot in Feed will remove it
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `videos/${video.id}`);
     } finally {
       setIsDeleting(false);
       setShowMenu(false);
+      setConfirmingAction(null);
     }
   };
 
@@ -152,11 +145,19 @@ export default function VideoCard({ video }: VideoCardProps) {
   };
 
   useEffect(() => {
+    // We already have a parent LazyVideoCard, but we want to control
+    // precisely when to PLAY versus just being MOUNTED (near).
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            setIsVisible(true);
+          // Internal visibility for preloading/likes
+          if (entry.isIntersecting && entry.intersectionRatio > 0.05) {
+            setHasStartedLoading(true);
+          }
+
+          // Focus logic for autoplay (requires more of the video to be visible)
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
+            setIsFocused(true);
             if (videoRef.current && !hasError && video.type !== 'photo') {
               const playPromise = videoRef.current.play();
               if (playPromise !== undefined) {
@@ -169,21 +170,16 @@ export default function VideoCard({ video }: VideoCardProps) {
               setPlaying(true);
             }
           } else {
-            if (videoRef.current) {
+            setIsFocused(false);
+            if (videoRef.current && video.type !== 'photo') {
               videoRef.current.pause();
             }
             setPlaying(false);
-            
-            // Unload if very far from viewport to save memory/data
-            if (entry.boundingClientRect.top > window.innerHeight * 2 || entry.boundingClientRect.bottom < -window.innerHeight) {
-              setIsVisible(false);
-            }
           }
         });
       },
       { 
-        rootMargin: '300px', // Extra margin for better loading
-        threshold: 0.1 
+        threshold: [0.05, 0.6] // Multiple thresholds for different quality levels
       }
     );
 
@@ -192,7 +188,6 @@ export default function VideoCard({ video }: VideoCardProps) {
       if (element) observer.observe(element);
     }
     
-    // Fallback observer target for images or when ref is not yet available
     return () => observer.disconnect();
   }, [hasError, video.type, video.id]);
 
@@ -233,14 +228,14 @@ export default function VideoCard({ video }: VideoCardProps) {
         await navigator.share(shareData);
       } else {
         await navigator.clipboard.writeText(shareUrl);
-        alert('Link copiado para a área de transferência!');
+        toast('info', 'Link copiado para a área de transferência!');
       }
     } catch (err) {
       console.error('Error sharing:', err);
       // Fallback
       try {
         await navigator.clipboard.writeText(shareUrl);
-        alert('Link copiado para a área de transferência!');
+        toast('info', 'Link copiado para a área de transferência!');
       } catch (copyErr) {
         console.error('Copy failed:', copyErr);
       }
@@ -275,7 +270,6 @@ export default function VideoCard({ video }: VideoCardProps) {
 
   const handleDeleteComment = async (commentId: string) => {
     if (!video.id || !commentId || isDeleting) return;
-    if (!window.confirm("Deseja excluir este comentário?")) return;
 
     try {
       await deleteDoc(doc(db, 'videos', video.id, 'comments', commentId));
@@ -285,11 +279,14 @@ export default function VideoCard({ video }: VideoCardProps) {
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `videos/${video.id}/comments/${commentId}`);
+    } finally {
+      setConfirmingAction(null);
+      setTargetCommentId(null);
     }
   };
 
   return (
-    <div id={`video-container-${video.id}`} className="h-full w-full snap-start relative bg-black group">
+    <div id={`video-container-${video.id}`} className="h-full w-full relative bg-black group">
       {!video.videoUrl || hasError ? (
         <div className="h-full w-full flex flex-col items-center justify-center bg-zinc-950 text-zinc-600 gap-4">
           <div className="p-8 rounded-full bg-zinc-900/50 border border-white/5">
@@ -303,10 +300,14 @@ export default function VideoCard({ video }: VideoCardProps) {
       ) : video.type === 'photo' || (video.videoUrl && (video.videoUrl.startsWith('data:image/') || video.videoUrl.match(/\.(jpg|jpeg|png|webp|gif|svg)$|dicebear/i))) ? (
         <div className="h-full w-full relative">
           <img 
-            src={isVisible ? video.videoUrl : ''} 
+            src={video.videoUrl} 
             alt={video.description}
-            className="h-full w-full object-cover opacity-90 transition-opacity duration-1000"
-            style={{ opacity: isVisible ? 0.9 : 0 }}
+            className={cn(
+              "h-full w-full object-cover transition-opacity duration-700 will-change-transform",
+              hasStartedLoading ? "opacity-90" : "opacity-0"
+            )}
+            loading="lazy"
+            decoding="async"
             onError={() => setHasError(true)}
           />
         </div>
@@ -314,9 +315,11 @@ export default function VideoCard({ video }: VideoCardProps) {
         <video
           key={video.videoUrl}
           ref={videoRef}
-          src={isVisible ? video.videoUrl : undefined}
-          className="h-full w-full object-cover opacity-80 transition-opacity duration-1000"
-          style={{ opacity: isVisible ? 0.8 : 0 }}
+          src={video.videoUrl} 
+          className={cn(
+            "h-full w-full object-cover transition-opacity duration-700 will-change-transform",
+            hasStartedLoading ? "opacity-80" : "opacity-0"
+          )}
           loop
           muted
           playsInline
@@ -379,11 +382,13 @@ export default function VideoCard({ video }: VideoCardProps) {
                   </button>
                   <div className="h-px bg-white/5 mx-2" />
                   <button 
-                    onClick={handleDelete}
-                    disabled={isDeleting}
+                    onClick={() => {
+                      setConfirmingAction('delete');
+                      setShowMenu(false);
+                    }}
                     className="w-full flex items-center gap-3 px-4 py-3 text-sm text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
                   >
-                    {isDeleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                    <Trash2 size={16} />
                     <span>Excluir vídeo</span>
                   </button>
                 </motion.div>
@@ -555,15 +560,16 @@ export default function VideoCard({ video }: VideoCardProps) {
                               {comment.createdAt?.toDate ? new Date(comment.createdAt.toDate()).toLocaleDateString() : 'Agora'}
                             </span>
                           </div>
-                          {(user?.uid === comment.userId || user?.uid === video.creatorId) && (
-                            <button 
-                              onClick={() => handleDeleteComment(comment.id)}
-                              className="text-zinc-600 hover:text-red-400 opacity-0 group-hover/comment:opacity-100 transition-all p-1"
-                              title="Excluir comentário"
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          )}
+          <button 
+            onClick={() => {
+              setTargetCommentId(comment.id);
+              setConfirmingAction('delete-comment');
+            }}
+            className="text-zinc-600 hover:text-red-400 opacity-0 group-hover/comment:opacity-100 transition-all p-1"
+            title="Excluir comentário"
+          >
+            <Trash2 size={12} />
+          </button>
                         </div>
                         <p className="text-sm text-zinc-400 leading-relaxed">{comment.text}</p>
                       </div>
@@ -645,6 +651,52 @@ export default function VideoCard({ video }: VideoCardProps) {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Confirmation Modal */}
+      <AnimatePresence>
+        {confirmingAction && (
+          <div className="absolute inset-0 z-[70] flex items-center justify-center px-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setConfirmingAction(null)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="w-full max-w-xs bg-zinc-900 border border-white/10 rounded-3xl p-6 shadow-2xl relative z-10 text-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Trash2 className="mx-auto mb-4 text-red-500" size={32} />
+              <h3 className="text-lg font-bold text-white mb-2">Tem certeza?</h3>
+              <p className="text-sm text-zinc-400 mb-6">Esta ação não pode ser desfeita.</p>
+              
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => setConfirmingAction(null)}
+                  className="bg-zinc-800 text-white font-bold py-3 rounded-xl active:scale-95 transition-all text-sm"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => {
+                    if (confirmingAction === 'delete') handleDelete();
+                    else if (confirmingAction === 'delete-comment' && targetCommentId) handleDeleteComment(targetCommentId);
+                  }}
+                  className="bg-red-600 text-white font-bold py-3 rounded-xl active:scale-95 transition-all text-sm"
+                >
+                  Excluir
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
-}
+});
+
+export default VideoCard;

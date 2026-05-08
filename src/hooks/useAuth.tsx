@@ -4,6 +4,7 @@ import {
   signInWithPopup, 
   GoogleAuthProvider, 
   signOut,
+  signInAnonymously,
   User
 } from 'firebase/auth';
 import { 
@@ -21,7 +22,7 @@ interface AuthContextType {
   profile: UserProfile | null;
   loading: boolean;
   isQuotaExceeded: boolean;
-  login: () => Promise<void>;
+  login: (method?: 'google' | 'anonymous') => Promise<void>;
   logout: () => Promise<void>;
   updateProfile: (data: Partial<UserProfile>) => Promise<void>;
   deleteAccount: () => Promise<void>;
@@ -31,7 +32,10 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(() => {
+    const cached = localStorage.getItem('tokmatch_profile');
+    return cached ? JSON.parse(cached) : null;
+  });
   const [loading, setLoading] = useState(true);
   const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
 
@@ -50,17 +54,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (currentUser) {
+        let isInitializing = false;
+        
+        // Use a timeout to ensure loading state resolves even if snapshot is slow
+        const loadingTimeout = setTimeout(() => {
+          setLoading(false);
+        }, 3000);
+
         // Real-time profile sync
         profileUnsubscribe = onSnapshot(doc(db, 'users', currentUser.uid), async (snapshot) => {
+          clearTimeout(loadingTimeout);
           if (snapshot.exists()) {
-            setProfile(snapshot.data() as UserProfile);
+            const profileData = snapshot.data() as UserProfile;
+            setProfile(profileData);
+            localStorage.setItem('tokmatch_profile', JSON.stringify(profileData));
             setLoading(false);
-          } else {
+          } else if (!isInitializing) {
+            isInitializing = true;
             // First time login - initialize
             try {
               const newProfile: UserProfile = {
                 uid: currentUser.uid,
-                displayName: currentUser.displayName || 'Usuário',
+                displayName: currentUser.displayName || (currentUser.isAnonymous ? 'Convidado' : 'Usuário'),
                 email: currentUser.email || '',
                 photoURL: currentUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.uid}`,
                 bio: '',
@@ -73,18 +88,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 updatedAt: serverTimestamp(),
               };
               await setDoc(doc(db, 'users', currentUser.uid), newProfile);
-              // snapshot listener will trigger again with the new data
             } catch (error) {
               handleFirestoreError(error, OperationType.CREATE, `users/${currentUser.uid}`);
               setLoading(false);
             }
           }
         }, (error) => {
+          clearTimeout(loadingTimeout);
           handleFirestoreError(error, OperationType.GET, `users/${currentUser.uid}`);
           setLoading(false);
         });
       } else {
         setProfile(null);
+        localStorage.removeItem('tokmatch_profile');
         setLoading(false);
       }
     });
@@ -96,9 +112,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const login = async () => {
-    const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
+  const login = async (method: 'google' | 'anonymous' = 'google') => {
+    if (method === 'google') {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+    } else {
+      await signInAnonymously(auth);
+    }
   };
 
   const logout = async () => {
