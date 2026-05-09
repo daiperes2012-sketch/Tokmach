@@ -474,39 +474,35 @@ export default function Match() {
                 )}>
                   {isNaughtyMode ? "MATCH SEM LIMITES" : "MATCH AO VIVO"}
                 </h1>
-                <p className="text-zinc-500 mb-8 text-sm">
+                
+                <div className="flex items-center justify-center gap-2 mb-4">
+                  <div className="flex -space-x-2">
+                    {[1, 2, 3].map((i) => (
+                      <div key={i} className="w-6 h-6 rounded-full border-2 border-zinc-950 overflow-hidden">
+                        <img 
+                          src={`https://i.pravatar.cc/100?u=match${i}${isNaughtyMode ? 'n' : 'p'}`} 
+                          className="w-full h-full object-cover"
+                          alt="Online User"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 bg-green-500/10 rounded-full border border-green-500/20">
+                    <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+                    <span className="text-[9px] font-black text-green-500 uppercase tracking-widest">{Math.floor(Math.random() * 200) + 1200} ON</span>
+                  </div>
+                </div>
+
+                <p className="text-zinc-500 mb-6 text-sm">
                   {isNaughtyMode 
                     ? "Aviso: Sem filtros de imagem e linguagem ativos. Entre por sua conta e risco. 🫦" 
                     : "Entre no quarto e encontre alguém sem restrições agora."}
                 </p>
-                
-                <div className="flex flex-wrap gap-2 justify-center mb-10">
-                  {PRESET_FETISHES.map(f => (
-                    <button
-                      key={f}
-                      onClick={() => toggleFetish(f)}
-                      className={cn(
-                        "px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all border-2",
-                        selectedFetishes.includes(f)
-                          ? (isNaughtyMode ? "bg-red-600 border-red-500 text-white shadow-lg shadow-red-600/30" : "bg-pink-500 border-pink-400 text-white shadow-lg shadow-pink-500/20")
-                          : "bg-zinc-900 border-white/5 text-zinc-500 hover:border-white/10"
-                      )}
-                    >
-                      {f}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="space-y-3 mb-10 w-full flex flex-col items-center">
-                  <FeatureBadge icon={ShieldOff} label={isNaughtyMode ? "FILTROS VISUAIS: OFF" : "Sem Censura"} className={isNaughtyMode ? "text-red-500 border-red-500/20 bg-red-500/5" : ""} />
-                  <FeatureBadge icon={Languages} label={isNaughtyMode ? "FILTRO DE LINGUAGEM: OFF" : "Tradução Direta"} className={isNaughtyMode ? "text-red-500 border-red-500/20 bg-red-500/5" : ""} />
-                  <FeatureBadge icon={Skull} label={isNaughtyMode ? "CONTEÚDO EXPLÍCITO" : "Privado & Ousado"} className={isNaughtyMode ? "text-red-500 border-red-500/20 bg-red-500/5" : ""} />
-                </div>
 
                 <button 
                   onClick={startSearching}
                   className={cn(
-                    "w-full font-black py-5 rounded-2xl transition-all active:scale-95 shadow-xl flex items-center justify-center gap-3 uppercase tracking-[0.2em] italic",
+                    "w-full font-black py-4 rounded-2xl transition-all active:scale-95 shadow-xl flex items-center justify-center gap-3 uppercase tracking-[0.2em] italic mb-8",
                     isNaughtyMode 
                       ? "bg-red-600 text-white shadow-red-900/50 hover:bg-red-500" 
                       : "bg-white hover:bg-zinc-200 text-black shadow-white/10"
@@ -515,6 +511,63 @@ export default function Match() {
                   {isNaughtyMode ? "QUERO TUDO AGORA" : "CONECTAR AGORA"}
                   <Zap size={20} className={isNaughtyMode ? "fill-white" : "fill-black"} />
                 </button>
+                
+                <div className="text-left mb-4">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500 mb-3 ml-2">Suas Preferências</p>
+                  <div className="flex flex-wrap gap-2 justify-start mb-6">
+                    {PRESET_FETISHES.map(f => (
+                      <button
+                        key={f}
+                        onClick={() => toggleFetish(f)}
+                        className={cn(
+                          "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border-2",
+                          selectedFetishes.includes(f)
+                            ? (isNaughtyMode ? "bg-red-600 border-red-500 text-white shadow-lg shadow-red-600/30" : "bg-pink-500 border-pink-400 text-white shadow-lg shadow-pink-500/20")
+                            : "bg-zinc-900 border-white/5 text-zinc-500 hover:border-white/10"
+                        )}
+                      >
+                        {f}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-zinc-900/50 border border-white/5 rounded-3xl p-4 mb-6">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500 mb-3 text-center">Garantias do Match</p>
+                  <div className="space-y-3 w-full flex flex-col items-center">
+                    <FeatureBadge icon={ShieldOff} label={isNaughtyMode ? "FILTROS VISUAIS: OFF" : "Sem Censura"} className={isNaughtyMode ? "text-red-500 border-red-500/20 bg-red-500/5" : ""} />
+                    <FeatureBadge icon={Languages} label={isNaughtyMode ? "FILTRO DE LINGUAGEM: OFF" : "Tradução Direta"} className={isNaughtyMode ? "text-red-500 border-red-500/20 bg-red-500/5" : ""} />
+                  </div>
+                </div>
+
+                <div className="relative mt-8 group">
+                  <div className="flex items-center justify-between mb-3 px-2">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Destaques Agora</p>
+                    <span className="text-[9px] font-bold text-pink-500 uppercase flex items-center gap-1 animate-pulse">
+                      <Flame size={10} /> Live agora
+                    </span>
+                  </div>
+                  <div className="flex gap-3 overflow-x-auto pb-4 no-scrollbar">
+                    {[1, 2, 3, 4].map((i) => (
+                      <div key={i} className="min-w-[100px] aspect-[3/4] bg-zinc-900 rounded-2xl overflow-hidden border border-white/5 relative group cursor-pointer active:scale-95 transition-transform">
+                        <img 
+                          src={`https://images.unsplash.com/photo-${1500000000000 + i * 100000000}?auto=compress&cs=tinysrgb&w=300&h=400&fit=crop`} 
+                          className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity" 
+                          alt="Highlight"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent" />
+                        <div className="absolute bottom-2 left-2 right-2">
+                          <p className="text-[8px] font-black text-white uppercase truncate">User {i}</p>
+                          <div className="flex items-center gap-1">
+                            <div className="w-1 h-1 bg-green-500 rounded-full" />
+                            <span className="text-[6px] text-zinc-400 font-bold uppercase">Online</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
               </motion.div>
             )}
 
