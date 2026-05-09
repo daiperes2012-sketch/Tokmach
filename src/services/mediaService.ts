@@ -92,9 +92,24 @@ export async function compressVideo(
 }
 
 /**
- * Compresses an image file by resizing it and lowering quality to fit constraints.
+ * Available photo filters
  */
-export async function compressImage(base64Str: string): Promise<string> {
+export const PHOTO_FILTERS = [
+  { id: 'none', label: 'Original', filter: 'none' },
+  { id: 'vibrant', label: 'Vibrante', filter: 'contrast(1.2) b-bright(1.1) saturate(1.3)' },
+  { id: 'film', label: 'Filme', filter: 'sepia(0.2) contrast(1.1) brightness(0.9) saturate(0.8)' },
+  { id: 'noir', label: 'Noir', filter: 'grayscale(1) contrast(1.3) brightness(0.9)' },
+  { id: 'warm', label: 'Quente', filter: 'sepia(0.4) saturate(1.4) brightness(1.05)' },
+  { id: 'cold', label: 'Frio', filter: 'hue-rotate(180deg) saturate(0.8) brightness(1.1)' },
+  { id: 'fade', label: 'Fade', filter: 'brightness(1.1) contrast(0.8) saturate(0.7)' },
+  { id: 'drama', label: 'Drama', filter: 'contrast(1.5) brightness(0.8) saturate(1.2)' }
+];
+
+/**
+ * Compresses an image file by resizing it and lowering quality to fit constraints.
+ * Now supports applying a filter string.
+ */
+export async function compressImage(base64Str: string, filterStr: string = 'none'): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image();
     img.src = base64Str;
@@ -117,7 +132,12 @@ export async function compressImage(base64Str: string): Promise<string> {
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext('2d');
-      ctx?.drawImage(img, 0, 0, width, height);
+      if (ctx) {
+        if (filterStr !== 'none') {
+          ctx.filter = filterStr.replace('b-bright', 'brightness'); // Fix for the custom naming if needed
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+      }
       
       let quality = 0.8;
       let result = canvas.toDataURL('image/jpeg', quality);

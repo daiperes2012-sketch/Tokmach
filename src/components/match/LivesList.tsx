@@ -199,7 +199,16 @@ export default function LivesList({ onSelectLive, onStartLive }: {
           ...d 
         };
       }) as LiveStream[];
-      setLives(data);
+
+      // Deduplicate by ID
+      const seenIds = new Set<string>();
+      const uniqueLives = data.filter(l => {
+        if (seenIds.has(l.id)) return false;
+        seenIds.add(l.id);
+        return true;
+      });
+
+      setLives(uniqueLives);
       setLoading(false);
       
       if (data.length === 0 && user) {

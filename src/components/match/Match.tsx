@@ -609,7 +609,7 @@ export default function Match() {
                         )}>{matchedUser?.displayName}</h2>
                         
                         <div className="flex flex-wrap justify-center gap-2 mt-4 max-w-xs">
-                          {(matchedUser?.fetishes || []).map((f: string) => (
+                          {Array.from(new Set(matchedUser?.fetishes || [])).map((f: string) => (
                             <span key={f} className={cn(
                               "text-[9px] font-black uppercase tracking-widest px-3 py-1 rounded-full border",
                               isNaughtyMode ? "bg-red-600/20 text-red-500 border-red-500/20" : "bg-white/10 text-white border-white/10"

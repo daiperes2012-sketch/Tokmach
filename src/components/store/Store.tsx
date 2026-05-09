@@ -14,18 +14,18 @@ export default function Store() {
   const { toast } = useToast();
 
   const coinPackages = [
-    { coins: 50, price: 'R$ 4,90', icon: Zap, color: 'text-blue-400' },
-    { coins: 200, price: 'R$ 14,90', icon: Flame, color: 'text-orange-500', popular: true },
-    { coins: 500, price: 'R$ 29,90', icon: Heart, color: 'text-pink-500' },
-    { coins: 1500, price: 'R$ 79,90', icon: Star, color: 'text-yellow-500' },
-    { coins: 5000, price: 'R$ 199,90', icon: Gift, color: 'text-purple-500', vip: true },
+    { coins: 50, price: 'R$ 2,90', icon: Zap, color: 'text-blue-400' },
+    { coins: 200, price: 'R$ 9,90', icon: Flame, color: 'text-orange-500', popular: true },
+    { coins: 500, price: 'R$ 19,90', icon: Heart, color: 'text-pink-500' },
+    { coins: 1500, price: 'R$ 49,90', icon: Star, color: 'text-yellow-500' },
+    { coins: 5000, price: 'R$ 99,90', icon: Gift, color: 'text-purple-500', vip: true },
   ];
 
   const gifts = [
-    { name: 'Coração', cost: 5, icon: Heart, color: 'text-pink-500' },
-    { name: 'Fogo', cost: 10, icon: Flame, color: 'text-orange-500' },
-    { name: 'Diamante', cost: 50, icon: ShoppingBag, color: 'text-blue-500' },
-    { name: 'Coroa', cost: 100, icon: Star, color: 'text-yellow-500' },
+    { name: 'Coração', cost: 2, icon: Heart, color: 'text-pink-500' },
+    { name: 'Fogo', cost: 5, icon: Flame, color: 'text-orange-500' },
+    { name: 'Diamante', cost: 25, icon: ShoppingBag, color: 'text-blue-500' },
+    { name: 'Coroa', cost: 50, icon: Star, color: 'text-yellow-500' },
   ];
 
   const handleBuy = async (amount: number) => {

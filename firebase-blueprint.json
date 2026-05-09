@@ -21,6 +21,17 @@
       },
       "required": ["uid", "displayName", "email"]
     },
+    "Follow": {
+      "title": "Follow",
+      "description": "Follow relationship between two users",
+      "type": "object",
+      "properties": {
+        "followerId": { "type": "string" },
+        "followedId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["followerId", "followedId"]
+    },
     "Video": {
       "title": "Video",
       "description": "Video feed content",
@@ -140,6 +151,10 @@
     "lives": {
       "schema": "Live",
       "description": "Collection of active live streams"
+    },
+    "follows": {
+      "schema": "Follow",
+      "description": "Collection of follow relationships"
     }
   }
 }

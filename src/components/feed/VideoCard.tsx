@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, memo } from 'react';
 import { VideoPost, VideoComment } from '../../types';
-import { Flame, MessageCircle, Share2, Music2, UserPlus, VideoOff, Send, X, Loader2, MoreVertical, Trash2, Edit3, Check } from 'lucide-react';
+import { Flame, MessageCircle, Share2, Music2, UserPlus, Plus, VideoOff, Send, X, Loader2, MoreVertical, Trash2, Edit3, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -29,12 +29,12 @@ function cn(...inputs: ClassValue[]) {
 
 interface VideoCardProps {
   video: VideoPost;
+  openProfile: (uid: string) => void;
 }
 
-const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
+const VideoCard = memo(function VideoCard({ video, openProfile }: VideoCardProps) {
   const { user, profile } = useAuth();
   const { toast } = useToast();
-  const [playing, setPlaying] = useState(false);
   const [liked, setLiked] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [showComments, setShowComments] = useState(false);
@@ -46,10 +46,8 @@ const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [editDescription, setEditDescription] = useState(video.description || '');
-  // Presence and focus tracking
+  // Presence tracking
   const [hasStartedLoading, setHasStartedLoading] = useState(false);
-  const [isFocused, setIsFocused] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
 
   const isOwner = user?.uid === video.creatorId;
 
@@ -57,7 +55,7 @@ const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
   useEffect(() => {
     if (!user || !video.id || !hasStartedLoading) return;
     
-    // Check if user has liked this video - using specific ID for efficiency
+    // Check if user has liked - using specific ID for efficiency
     const likeDocRef = doc(db, 'likes', `${user.uid}_${video.id}`);
     
     const unsubscribe = onSnapshot(likeDocRef, (snapshot) => {
@@ -99,17 +97,6 @@ const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
     }
   };
 
-  const togglePlay = () => {
-    if (videoRef.current && !hasError) {
-      if (playing) {
-        videoRef.current.pause();
-      } else {
-        videoRef.current.play().catch(console.error);
-      }
-      setPlaying(!playing);
-    }
-  };
-
   const [confirmingAction, setConfirmingAction] = useState<'delete' | 'delete-comment' | null>(null);
   const [targetCommentId, setTargetCommentId] = useState<string | null>(null);
 
@@ -145,51 +132,24 @@ const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
   };
 
   useEffect(() => {
-    // We already have a parent LazyVideoCard, but we want to control
-    // precisely when to PLAY versus just being MOUNTED (near).
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          // Internal visibility for preloading/likes
           if (entry.isIntersecting && entry.intersectionRatio > 0.05) {
             setHasStartedLoading(true);
-          }
-
-          // Focus logic for autoplay (requires more of the video to be visible)
-          if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
-            setIsFocused(true);
-            if (videoRef.current && !hasError && video.type !== 'photo') {
-              const playPromise = videoRef.current.play();
-              if (playPromise !== undefined) {
-                playPromise.catch(error => {
-                  if (error.name !== "NotAllowedError" && error.name !== "AbortError") {
-                    console.warn("Video play failed:", error);
-                  }
-                });
-              }
-              setPlaying(true);
-            }
-          } else {
-            setIsFocused(false);
-            if (videoRef.current && video.type !== 'photo') {
-              videoRef.current.pause();
-            }
-            setPlaying(false);
           }
         });
       },
       { 
-        threshold: [0.05, 0.6] // Multiple thresholds for different quality levels
+        threshold: [0.05]
       }
     );
 
-    if (videoRef.current || video.type === 'photo') {
-      const element = videoRef.current || (document.getElementById(`video-container-${video.id}`));
-      if (element) observer.observe(element);
-    }
+    const element = document.getElementById(`video-container-${video.id}`);
+    if (element) observer.observe(element);
     
     return () => observer.disconnect();
-  }, [hasError, video.type, video.id]);
+  }, [video.id]);
 
   useEffect(() => {
     if (showComments && video.id) {
@@ -218,7 +178,7 @@ const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
   const handleShare = async () => {
     const shareUrl = `${window.location.origin}${window.location.pathname}?v=${video.id || ''}`;
     const shareData = {
-      title: 'Confira este vídeo no Vibe Privada!',
+      title: 'Confira esta foto no Vibe Privada!',
       text: video.description || '',
       url: shareUrl,
     };
@@ -232,7 +192,6 @@ const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
       }
     } catch (err) {
       console.error('Error sharing:', err);
-      // Fallback
       try {
         await navigator.clipboard.writeText(shareUrl);
         toast('info', 'Link copiado para a área de transferência!');
@@ -286,7 +245,7 @@ const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
   };
 
   return (
-    <div id={`video-container-${video.id}`} className="h-full w-full relative bg-black group">
+    <div id={`video-container-${video.id}`} className="h-full w-full relative bg-black group snap-start">
       {!video.videoUrl || hasError ? (
         <div className="h-full w-full flex flex-col items-center justify-center bg-zinc-950 text-zinc-600 gap-4">
           <div className="p-8 rounded-full bg-zinc-900/50 border border-white/5">
@@ -297,7 +256,7 @@ const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
             <p className="text-[8px] text-zinc-500 font-mono">CODE: {video.id?.slice(0, 8)}</p>
           </div>
         </div>
-      ) : video.type === 'photo' || (video.videoUrl && (video.videoUrl.startsWith('data:image/') || video.videoUrl.match(/\.(jpg|jpeg|png|webp|gif|svg)$|dicebear/i))) ? (
+      ) : (
         <div className="h-full w-full relative">
           <img 
             src={video.videoUrl} 
@@ -311,43 +270,13 @@ const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
             onError={() => setHasError(true)}
           />
         </div>
-      ) : (
-        <video
-          key={video.videoUrl}
-          ref={videoRef}
-          src={video.videoUrl} 
-          className={cn(
-            "h-full w-full object-cover transition-opacity duration-700 will-change-transform",
-            hasStartedLoading ? "opacity-80" : "opacity-0"
-          )}
-          loop
-          muted
-          playsInline
-          preload="metadata"
-          onClick={togglePlay}
-          onCanPlay={() => {
-            if (playing && videoRef.current) {
-               videoRef.current.play().catch(() => {});
-            }
-          }}
-          onError={(e) => {
-            const videoElement = e.currentTarget;
-            if (videoElement.error && videoElement.error.code === 4) {
-               console.warn("Video source not supported or missing:", video.videoUrl);
-            }
-            setHasError(true);
-          }}
-          poster={video.thumbnailUrl}
-        />
       )}
 
-      <div className="absolute inset-0 bg-gradient-to-b from-purple-900/40 via-transparent to-black pointer-events-none" />
+      <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/80 pointer-events-none" />
 
       {/* Top Header Actions */}
       <div className="absolute top-6 left-0 right-0 px-4 flex items-center justify-between z-20">
-        <div className="flex items-center gap-2">
-          {/* Back button or logo could go here if needed, but keeping it clean */}
-        </div>
+        <div className="flex items-center gap-2" />
         
         {isOwner && (
           <div className="relative">
@@ -389,7 +318,7 @@ const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
                     className="w-full flex items-center gap-3 px-4 py-3 text-sm text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
                   >
                     <Trash2 size={16} />
-                    <span>Excluir vídeo</span>
+                    <span>Excluir post</span>
                   </button>
                 </motion.div>
               )}
@@ -426,7 +355,7 @@ const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
               <textarea
                 value={editDescription}
                 onChange={(e) => setEditDescription(e.target.value)}
-                placeholder="Escreva algo sobre este vídeo..."
+                placeholder="Escreva algo sobre este post..."
                 className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-sm text-white h-32 focus:outline-none focus:ring-2 focus:ring-pink-500/50 transition-all resize-none mb-6"
                 autoFocus
               />
@@ -446,14 +375,22 @@ const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
 
       {/* Right Actions */}
       <div className="absolute right-4 bottom-24 flex flex-col items-center gap-6 z-10">
-        <div className="relative mb-2">
-          <div className="w-12 h-12 rounded-full border-2 border-pink-500 overflow-hidden bg-zinc-800 shadow-lg shadow-pink-500/20">
+        <button 
+          onClick={(e) => {
+            e.stopPropagation();
+            openProfile(video.creatorId);
+          }}
+          className="relative mb-2 group/avatar"
+        >
+          <div className="w-12 h-12 rounded-full border-2 border-pink-500 overflow-hidden bg-zinc-800 shadow-lg shadow-pink-500/20 group-hover/avatar:scale-110 transition-transform">
             <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${video.creatorId}`} alt="Creator" />
           </div>
-          <button className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-pink-600 text-white rounded-full p-0.5 hover:scale-110 shadow-lg">
-            <UserPlus size={14} />
-          </button>
-        </div>
+          {!isOwner && (
+            <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-pink-600 text-white rounded-full p-0.5 shadow-lg">
+              <Plus size={14} />
+            </div>
+          )}
+        </button>
 
         <button 
           onClick={toggleLike}
@@ -475,8 +412,6 @@ const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
           </motion.div>
           <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-300 drop-shadow-md">{video.likesCount}</span>
         </button>
-
-
 
         <button 
           onClick={() => setShowComments(true)}
@@ -606,10 +541,16 @@ const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
 
       {/* Bottom Info */}
       <div className="absolute left-4 right-16 bottom-6 z-10">
-        <div className="flex items-center gap-2 mb-2">
-          <h3 className="font-bold text-lg tracking-tight text-white drop-shadow-md">@{video.creatorId}</h3>
+        <button 
+          onClick={(e) => {
+            e.stopPropagation();
+            openProfile(video.creatorId);
+          }}
+          className="flex items-center gap-2 mb-2 group/name"
+        >
+          <h3 className="font-bold text-lg tracking-tight text-white drop-shadow-md group-hover/name:text-pink-500 transition-colors">@{video.creatorId.slice(0, 8)}</h3>
           <span className="bg-pink-500/20 text-pink-500 text-[8px] px-1.5 py-0.5 rounded font-bold uppercase tracking-widest border border-pink-500/30">Hot</span>
-        </div>
+        </button>
         <p className="text-sm line-clamp-2 mb-4 leading-relaxed text-zinc-200 drop-shadow-sm">{video.description}</p>
         
         {video.commentsCount > 0 && (
@@ -630,27 +571,11 @@ const VideoCard = memo(function VideoCard({ video }: VideoCardProps) {
               transition={{ duration: 12, repeat: Infinity, ease: "linear" }}
               className="inline-block px-1"
             >
-              Som original - {video.creatorId} • Vibe Privada • Som original - {video.creatorId}
+              Vibe Privada - {video.creatorId} • Fotografia • Vibe Privada - {video.creatorId}
             </motion.p>
           </div>
         </div>
       </div>
-
-      {/* Play/Pause Overlay */}
-      <AnimatePresence>
-        {!playing && (
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.5 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 1.5 }}
-            className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/10"
-          >
-            <div className="bg-black/40 p-10 rounded-full backdrop-blur-md border border-white/10 shadow-2xl">
-              <Flame size={80} className="text-pink-500/40" />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* Confirmation Modal */}
       <AnimatePresence>

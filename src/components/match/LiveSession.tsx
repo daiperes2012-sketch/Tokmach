@@ -56,7 +56,7 @@ export default function LiveSession({ live, onClose }: { live: LiveStream; onClo
     // Simulate chat messages
     const interval = setInterval(() => {
       const newMessage: Message = {
-        id: Date.now(),
+        id: Date.now() + Math.random(),
         user: simulatedNames[Math.floor(Math.random() * simulatedNames.length)],
         text: simulatedTexts[Math.floor(Math.random() * simulatedTexts.length)],
         color: colors[Math.floor(Math.random() * colors.length)]
@@ -76,7 +76,7 @@ export default function LiveSession({ live, onClose }: { live: LiveStream; onClo
     try {
       await updateProfile({ balance: (profile?.balance || 0) - gift.price });
       const newMessage: Message = {
-        id: Date.now(),
+        id: Date.now() + Math.random(),
         user: 'SISTEMA',
         text: `Enviou um(a) ${gift.label} ${gift.icon}!`,
         color: 'text-yellow-500 font-black'
@@ -93,7 +93,7 @@ export default function LiveSession({ live, onClose }: { live: LiveStream; onClo
     if (!inputText.trim()) return;
     
     const newMessage: Message = {
-      id: Date.now(),
+      id: Date.now() + Math.random(),
       user: 'Eu',
       text: inputText,
       color: 'text-white font-bold'

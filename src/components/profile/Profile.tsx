@@ -11,52 +11,54 @@ import {
   Trash2, 
   X,
   ChevronRight,
+  ChevronLeft,
   ShieldAlert,
   UserX,
   Bell,
   CheckCircle2,
   Camera,
   Plus,
-  Video,
   VideoOff,
   Image as ImageIcon,
   Radio,
-  Upload,
   Loader2,
   Play,
   MessageCircle,
   Share2,
-  MoreHorizontal
+  MoreHorizontal,
+  UserPlus,
+  UserMinus,
+  Upload
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import LiveBroadcast from '../match/LiveBroadcast';
-import { useDropzone } from 'react-dropzone';
-import { collection, addDoc, serverTimestamp, query, where, onSnapshot, orderBy, getDocs, doc, documentId } from 'firebase/firestore';
+import { collection, serverTimestamp, query, where, onSnapshot, orderBy, getDocs, doc, deleteDoc, updateDoc, increment, addDoc, setDoc, documentId } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../../services/firebase';
 import { useToast } from '../../hooks/useToast';
-import { compressVideo, getVideoDuration, compressImage } from '../../services/mediaService';
+import { compressImage } from '../../services/mediaService';
+import { useDropzone } from 'react-dropzone';
 import CameraModal from './CameraModal';
+import PhotoUploadModal from '../common/PhotoUploadModal';
 
-export default function Profile() {
-  const { profile, user, logout, updateProfile, deleteAccount } = useAuth();
+export default function Profile({ targetUserId, onBack }: { targetUserId?: string | null; onBack?: () => void }) {
+  const { profile: myProfile, user, logout, updateProfile, deleteAccount } = useAuth();
   const { toast, confirm: appConfirm } = useToast();
+  
+  const [targetProfile, setTargetProfile] = useState<any | null>(null);
+  const [isFollowing, setIsFollowing] = useState(false);
+  const [isFollowLoading, setIsFollowLoading] = useState(false);
+  const [loadingProfile, setLoadingProfile] = useState(false);
+
+  const isOwnProfile = !targetUserId || targetUserId === user?.uid;
+  const profile = isOwnProfile ? myProfile : targetProfile;
+  const currentUserId = isOwnProfile ? user?.uid : targetUserId;
+
   const [isEditing, setIsEditing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [showLiveBroadcast, setShowLiveBroadcast] = useState(false);
   const [showCamera, setShowCamera] = useState(false);
-  const [uploadType, setUploadType] = useState<'video' | 'photo' | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const [isSuccess, setIsSuccess] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [uploadCaption, setUploadCaption] = useState('');
-  const [previewFile, setPreviewFile] = useState<string | null>(null);
-  const [userVideos, setUserVideos] = useState<any[]>([]);
   const [userPhotos, setUserPhotos] = useState<any[]>([]);
-  const [likedVideos, setLikedVideos] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<'posts' | 'gallery' | 'likes'>('posts');
+  const [likedPhotos, setLikedPhotos] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<'gallery' | 'likes'>('gallery');
   const [totalLikesReceived, setTotalLikesReceived] = useState(0);
   const [editName, setEditName] = useState(profile?.displayName || '');
   const [editBio, setEditBio] = useState(profile?.bio || '');
@@ -67,11 +69,86 @@ export default function Profile() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [selectedMedia, setSelectedMedia] = useState<any | null>(null);
   const [selectedMediaIndex, setSelectedMediaIndex] = useState(0);
+  
+  // State for profile/cover simple uploads
+  const [simpleUploadProgress, setSimpleUploadProgress] = useState(0);
+  const [isProcessingSimple, setIsProcessingSimple] = useState(false);
+
+  // Fetch target profile if not own
+  useEffect(() => {
+    if (isOwnProfile || !targetUserId) {
+      setTargetProfile(null);
+      return;
+    }
+
+    setLoadingProfile(true);
+    const unsub = onSnapshot(doc(db, 'users', targetUserId), (snap) => {
+      if (snap.exists()) {
+        setTargetProfile({ id: snap.id, ...snap.data() });
+      }
+      setLoadingProfile(false);
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, `users/${targetUserId}`);
+      setLoadingProfile(false);
+    });
+
+    return unsub;
+  }, [targetUserId, isOwnProfile]);
+
+  // Check if following
+  useEffect(() => {
+    if (isOwnProfile || !user || !targetUserId) {
+      setIsFollowing(false);
+      return;
+    }
+
+    const followId = `${user.uid}_${targetUserId}`;
+    const unsub = onSnapshot(doc(db, 'follows', followId), (snap) => {
+      setIsFollowing(snap.exists());
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, `follows/${followId}`);
+    });
+
+    return unsub;
+  }, [user, targetUserId, isOwnProfile]);
+
+  const handleFollow = async () => {
+    if (!user || !targetUserId || isOwnProfile || isFollowLoading) return;
+
+    setIsFollowLoading(true);
+    const followId = `${user.uid}_${targetUserId}`;
+    const followDoc = doc(db, 'follows', followId);
+
+    try {
+      if (isFollowing) {
+        // Unfollow
+        await deleteDoc(followDoc);
+        // Decrement counts
+        await updateDoc(doc(db, 'users', user.uid), { followingCount: increment(-1) });
+        await updateDoc(doc(db, 'users', targetUserId), { followersCount: increment(-1) });
+        toast('info', `Deixaste de seguir @${targetUserId.slice(0, 8)}`);
+      } else {
+        // Follow
+        await setDoc(followDoc, {
+          followerId: user.uid,
+          followedId: targetUserId,
+          createdAt: serverTimestamp()
+        });
+        // Increment counts
+        await updateDoc(doc(db, 'users', user.uid), { followingCount: increment(1) });
+        await updateDoc(doc(db, 'users', targetUserId), { followersCount: increment(1) });
+        toast('success', `Agora segues @${targetUserId.slice(0, 8)}`);
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'follows');
+    } finally {
+      setIsFollowLoading(false);
+    }
+  };
 
   const getCurrentList = () => {
-    if (activeTab === 'posts') return userVideos;
     if (activeTab === 'gallery') return userPhotos;
-    return likedVideos;
+    return likedPhotos;
   };
 
   const handleNextMedia = () => {
@@ -92,7 +169,7 @@ export default function Profile() {
     }
   };
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
   const coverInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -106,29 +183,33 @@ export default function Profile() {
     }
   }, [editName, editBio, editPhotoURL, editCoverURL, profile, isEditing]);
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'profile' | 'cover') => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'avatar' | 'cover') => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onloadstart = () => {
-      if (type === 'profile') setUploadingProfile(true);
-      else setUploadingCover(true);
-    };
-    reader.onloadend = async () => {
-      const base64String = reader.result as string;
-      // Compress profile/cover images too
-      const compressed = await compressImage(base64String);
-      
-      if (type === 'profile') {
-        setEditPhotoURL(compressed);
-        setUploadingProfile(false);
-      } else {
-        setEditCoverURL(compressed);
-        setUploadingCover(false);
-      }
-    };
-    reader.readAsDataURL(file);
+    if (type === 'avatar') setUploadingProfile(true);
+    else setUploadingCover(true);
+
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64 = reader.result as string;
+        const compressed = await compressImage(base64);
+        if (type === 'avatar') {
+          setEditPhotoURL(compressed);
+        } else {
+          setEditCoverURL(compressed);
+        }
+        setHasUnsavedChanges(true);
+        if (type === 'avatar') setUploadingProfile(false);
+        else setUploadingCover(false);
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      toast('error', 'Falha ao processar imagem');
+      if (type === 'avatar') setUploadingProfile(false);
+      else setUploadingCover(false);
+    }
   };
 
   const profilePresets = [
@@ -156,44 +237,51 @@ export default function Profile() {
   }, [profile, isEditing]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!currentUserId) return;
     const q = query(
       collection(db, 'videos'),
-      where('creatorId', '==', user.uid),
+      where('creatorId', '==', currentUserId),
       orderBy('createdAt', 'desc')
     );
 
     const unsub = onSnapshot(q, { includeMetadataChanges: false }, (snap) => {
-      const videos = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
-      setUserVideos(videos);
-      setUserPhotos(videos.filter(v => 
-        v.type === 'photo' || 
-        (v.videoUrl && (v.videoUrl.startsWith('data:image/') || v.videoUrl.match(/\.(jpg|jpeg|png|webp|gif|svg)$|dicebear/i)))
-      ));
+      const posts = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
       
-      const total = videos.reduce((sum, vid) => sum + (vid.likesCount || 0), 0);
+      // Deduplicate
+      const seen = new Set();
+      const uniquePosts = posts.filter(p => {
+        if (seen.has(p.id)) return false;
+        seen.add(p.id);
+        return true;
+      });
+      
+      setUserPhotos(uniquePosts);
+      
+      const total = uniquePosts.reduce((sum, vid) => sum + (vid.likesCount || 0), 0);
       setTotalLikesReceived(total);
     }, (err) => {
       handleFirestoreError(err, OperationType.LIST, 'videos');
     });
 
     return unsub;
-  }, [user]);
+  }, [currentUserId]);
 
-  const [likedVideoIds, setLikedVideoIds] = useState<string[]>([]);
+  const [likedPostIds, setLikedPostIds] = useState<string[]>([]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!currentUserId) return;
     
     const likesQuery = query(
       collection(db, 'likes'),
-      where('userId', '==', user.uid),
+      where('userId', '==', currentUserId),
       orderBy('createdAt', 'desc')
     );
 
     const unsubscribe = onSnapshot(likesQuery, (snapshot) => {
       const ids = snapshot.docs.map(d => d.data().videoId);
-      setLikedVideoIds(ids);
+      // Deduplicate IDs
+      const uniqueIds = Array.from(new Set(ids));
+      setLikedPostIds(uniqueIds);
     }, (err) => {
       handleFirestoreError(err, OperationType.LIST, 'likes');
     });
@@ -203,14 +291,14 @@ export default function Profile() {
 
   useEffect(() => {
     let active = true;
-    const fetchVideos = async () => {
-      if (likedVideoIds.length === 0) {
-        setLikedVideos([]);
+    const fetchPosts = async () => {
+      if (likedPostIds.length === 0) {
+        setLikedPhotos([]);
         return;
       }
 
       try {
-        const idsToFetch = likedVideoIds.slice(0, 30);
+        const idsToFetch = likedPostIds.slice(0, 30);
         
         const videosQuery = query(
           collection(db, 'videos'),
@@ -220,145 +308,25 @@ export default function Profile() {
         const snapshot = await getDocs(videosQuery);
         if (!active) return;
         
-        const videosData = snapshot.docs.map(doc => ({ 
+        const postsData = snapshot.docs.map(doc => ({ 
           id: doc.id, 
           ...doc.data() 
         }));
         
-        setLikedVideos(videosData);
+        setLikedPhotos(postsData);
       } catch (error) {
         handleFirestoreError(error, OperationType.LIST, 'videos (likes metadata)');
       }
     };
 
-    fetchVideos();
+    fetchPosts();
     return () => { active = false; };
-  }, [likedVideoIds]);
+  }, [likedPostIds]);
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    accept: uploadType === 'video' ? { 'video/*': [] } : { 'image/*': [] },
-    maxFiles: 1,
-    onDrop: async (acceptedFiles) => {
-      if (acceptedFiles.length > 0) {
-        const file = acceptedFiles[0];
-        
-        if (uploadType === 'video') {
-          // Check duration first
-          const duration = await getVideoDuration(file);
-          if (duration > 32) { // 2s grace
-            toast('error', 'O vídeo excedeu o limite de 30 segundos. Por favor, corte-o.');
-            return;
-          }
-
-          setIsProcessing(true);
-          setUploadProgress(0);
-          try {
-            toast('info', 'Processando seu vídeo...');
-            const compressed = await compressVideo(file, (progress) => {
-              setUploadProgress(Math.round(progress));
-            });
-            
-            // Check final size (Firestore ~1MB limit)
-            if (compressed.length > 1300000) { // ~975KB binary
-              toast('warning', 'O vídeo ainda está um pouco grande. Tente um vídeo mais curto se o upload falhar.');
-            }
-            
-            setPreviewFile(compressed);
-            toast('success', 'Vídeo pronto para publicar!');
-          } catch (err) {
-            console.error("Compression failed:", err);
-            toast('warning', 'Processamento falhou. Tentando upload direto...');
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              setPreviewFile(reader.result as string);
-              setIsProcessing(false);
-            };
-            reader.readAsDataURL(file);
-            return; // Exit here as reader handles it
-          } finally {
-            setIsProcessing(false);
-            setUploadProgress(0);
-          }
-          return;
-        }
-
-        // For photos or small fallback
-        const reader = new FileReader();
-        reader.onprogress = (e) => {
-          if (e.lengthComputable) {
-            setUploadProgress(Math.round((e.loaded / e.total) * 100));
-          }
-        };
-        reader.onloadstart = () => setIsProcessing(true);
-        reader.onloadend = async () => {
-          const result = reader.result as string;
-          if (uploadType === 'photo') {
-            try {
-              const compressed = await compressImage(result);
-              setPreviewFile(compressed);
-            } catch (err) {
-              setPreviewFile(result);
-            }
-          } else {
-            setPreviewFile(result);
-          }
-          setIsProcessing(false);
-          setUploadProgress(0);
-        };
-        reader.readAsDataURL(file);
-      }
-    }
-  });
-
-  const handlePublish = async () => {
-    if (!previewFile || !user) return;
-    
-    setIsUploading(true);
-    try {
-      let finalAssetUrl = previewFile;
-      
-      // Safety threshold: Firestore documents must be < 1MB. 
-      if (previewFile.length > 900000) {
-        if (uploadType === 'video') {
-          finalAssetUrl = 'https://player.vimeo.com/external/370331493.sd.mp4?s=2907373ae13977a493fb0efeb986381005a761e2&profile_id=139&oauth2_token_id=57447761';
-          console.warn("Video too large for database, using optimized fallback");
-        } else {
-          throw new Error('A imagem é muito grande para os limites do banco de dados, tente outra.');
-        }
-      }
-      
-      await addDoc(collection(db, 'videos'), {
-        creatorId: user.uid,
-        videoUrl: finalAssetUrl, 
-        thumbnailUrl: profile?.photoURL || 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + user.uid,
-        description: uploadCaption || `Novo ${uploadType === 'video' ? 'vídeo' : 'post'} de ${profile?.displayName || 'Usuário'}`,
-        likesCount: 0,
-        commentsCount: 0,
-        createdAt: serverTimestamp(),
-        type: uploadType
-      });
-
-      setIsSuccess(true);
-      toast('success', `${uploadType === 'video' ? 'Vídeo' : 'Foto'} publicado com sucesso!`);
-      
-      // Close modal after delay to show success
-      setTimeout(() => {
-        setIsUploading(false);
-        setIsSuccess(false);
-        setShowUploadModal(false);
-        setPreviewFile(null);
-        setUploadCaption('');
-      }, 2000);
-    } catch (err) {
-      setIsUploading(false);
-      handleFirestoreError(err, OperationType.CREATE, 'videos');
-    }
-  };
-
-  const handleCameraCapture = (dataUrl: string, type: 'photo' | 'video') => {
-    setUploadType(type);
-    setPreviewFile(dataUrl);
-    setShowUploadModal(true);
+  const handleCameraCapture = (dataUrl: string) => {
+    // For now, camera capture on profile goes to new post
+    // But since the new modal handles the whole flow, we just trigger it
+    toast('info', 'Por favor, carregue a foto da galeria para usar os novos filtros.');
     setShowCamera(false);
   };
 
@@ -412,18 +380,34 @@ export default function Profile() {
         {/* Header */}
         <div className="sticky top-0 bg-black/40 backdrop-blur-md z-20 px-6 py-4 flex justify-between items-center border-b border-white/5 -mt-48">
           <div className="flex items-center gap-2">
+            {!isOwnProfile && onBack && (
+              <button 
+                onClick={onBack} 
+                className="p-2 -ml-2 hover:bg-white/10 rounded-full transition-colors mr-1"
+              >
+                <ChevronLeft size={24} />
+              </button>
+            )}
             <h2 className="text-xl font-bold tracking-tight">{profile.displayName}</h2>
           </div>
           <div className="flex items-center gap-2">
-            <button 
-              onClick={() => setShowCamera(true)} 
-              className="p-2 hover:bg-white/10 rounded-full transition-colors text-pink-500"
-            >
-              <Camera size={22} />
-            </button>
-            <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
-              <Settings size={22} />
-            </button>
+            {isOwnProfile ? (
+              <>
+                <button 
+                  onClick={() => setShowCamera(true)} 
+                  className="p-2 hover:bg-white/10 rounded-full transition-colors text-pink-500"
+                >
+                  <Camera size={22} />
+                </button>
+                <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                  <Settings size={22} />
+                </button>
+              </>
+            ) : (
+              <button className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                <MoreHorizontal size={22} />
+              </button>
+            )}
           </div>
         </div>
 
@@ -437,35 +421,37 @@ export default function Profile() {
               className="w-full h-full rounded-[2.25rem] object-cover"
             />
           </div>
-          <button 
-            onClick={() => setIsEditing(true)}
-            className="absolute bottom-2 right-2 p-3 bg-pink-600 rounded-2xl border-4 border-black hover:scale-110 active:scale-95 transition-all shadow-xl text-white group-hover:rotate-6"
-          >
-            <Camera size={18} />
-          </button>
+          {isOwnProfile && (
+            <button 
+              onClick={() => setIsEditing(true)}
+              className="absolute bottom-2 right-2 p-3 bg-pink-600 rounded-2xl border-4 border-black hover:scale-110 active:scale-95 transition-all shadow-xl text-white group-hover:rotate-6"
+            >
+              <Camera size={18} />
+            </button>
+          )}
         </div>
 
         <h1 className="text-xl font-bold mb-1 flex items-center gap-2">
-          @{user?.uid.slice(0, 8)}
+          @{currentUserId?.slice(0, 8)}
         </h1>
         
         <div className="flex flex-wrap items-center justify-center gap-2 mb-6">
           <div className="flex items-center gap-1.5 bg-yellow-500/10 px-3 py-1 rounded-full border border-yellow-500/20">
-            <span className="text-yellow-500 font-bold text-xs">{(profile as any).balance || 0} Moedas</span>
+            <span className="text-yellow-500 font-bold text-xs">{profile.balance || 0} Moedas</span>
           </div>
         </div>
         <p className="text-zinc-500 text-sm mb-6 px-12 text-center leading-relaxed">
-          {profile.bio || "Adicione uma bio para as pessoas te conhecerem melhor."}
+          {profile.bio || (isOwnProfile ? "Adicione uma bio para as pessoas te conhecerem melhor." : "Este usuário ainda não adicionou uma bio.")}
         </p>
 
         {/* Stats */}
         <div className="flex justify-center gap-12 w-full max-w-xs mb-8">
           <div className="flex flex-col items-center">
-            <span className="font-bold text-lg">{profile.followingCount}</span>
+            <span className="font-bold text-lg">{profile.followingCount || 0}</span>
             <span className="text-xs text-zinc-500 uppercase tracking-widest">Seguindo</span>
           </div>
           <div className="flex flex-col items-center">
-            <span className="font-bold text-lg">{profile.followersCount}</span>
+            <span className="font-bold text-lg">{profile.followersCount || 0}</span>
             <span className="text-xs text-zinc-500 uppercase tracking-widest">Seguidores</span>
           </div>
           <div className="flex flex-col items-center">
@@ -473,27 +459,55 @@ export default function Profile() {
             <span className="text-xs text-zinc-500 uppercase tracking-widest">Curtidas</span>
           </div>
         </div>
+      </div>
 
-        <button 
-          onClick={() => setIsEditing(true)}
-          className="w-full max-w-xs py-3 px-6 bg-zinc-800 rounded-xl font-semibold hover:bg-zinc-700 transition-colors active:scale-95 flex items-center justify-center gap-2"
-        >
-          Editar Perfil
-        </button>
+      {/* Actions */}
+      <div className="flex gap-3 px-6 mb-8 w-full max-w-sm mx-auto">
+        {isOwnProfile ? (
+          <button 
+            onClick={() => setShowUploadModal(true)}
+            className="flex-1 py-4 bg-pink-600 text-white font-black uppercase tracking-widest text-[11px] rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-pink-600/20 active:scale-95 transition-all"
+          >
+            <Plus size={18} />
+            Postar Foto
+          </button>
+        ) : (
+          <div className="flex gap-3 w-full">
+            <button 
+              onClick={handleFollow}
+              disabled={isFollowLoading}
+              className={cn(
+                "flex-1 py-4 rounded-2xl font-black uppercase tracking-widest text-[11px] transition-all active:scale-95 flex items-center justify-center gap-2",
+                isFollowing 
+                  ? "bg-zinc-800 text-white hover:bg-zinc-700" 
+                  : "bg-pink-600 text-white hover:bg-pink-700 shadow-lg shadow-pink-600/20"
+              )}
+            >
+              {isFollowLoading ? (
+                <Loader2 size={18} className="animate-spin" />
+              ) : isFollowing ? (
+                <>
+                  <UserMinus size={18} />
+                  <span>Seguindo</span>
+                </>
+              ) : (
+                <>
+                  <UserPlus size={18} />
+                  <span>Seguir</span>
+                </>
+              )}
+            </button>
+            <button className="flex-1 py-4 bg-zinc-800 text-white font-black uppercase tracking-widest text-[11px] rounded-2xl hover:bg-zinc-700 transition-colors active:scale-95 flex items-center justify-center gap-2">
+              <LogOut size={18} className="rotate-180" />
+              Chat
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Content Tabs */}
       <div className="border-t border-white/5">
         <div className="flex border-b border-white/5">
-          <button 
-            onClick={() => setActiveTab('posts')}
-            className={cn(
-              "flex-1 py-4 flex justify-center transition-all",
-              activeTab === 'posts' ? "border-b-2 border-white text-white" : "text-zinc-500 opacity-50"
-            )}
-          >
-            <Grid size={22} />
-          </button>
           <button 
             onClick={() => setActiveTab('gallery')}
             className={cn(
@@ -501,7 +515,7 @@ export default function Profile() {
               activeTab === 'gallery' ? "border-b-2 border-white text-white" : "text-zinc-500 opacity-50"
             )}
           >
-            <ImageIcon size={22} />
+            <Grid size={22} />
           </button>
           <button 
             onClick={() => setActiveTab('likes')}
@@ -514,18 +528,21 @@ export default function Profile() {
           </button>
         </div>
         
-        {activeTab === 'posts' ? (
-          userVideos.length > 0 ? (
+        {activeTab === 'gallery' ? (
+          userPhotos.length > 0 ? (
             <div className="grid grid-cols-3 gap-0.5">
-              {userVideos.map((vid, idx) => (
-                <VideoThumbnail 
+              {userPhotos.map((vid, idx) => (
+                <div 
                   key={vid.id} 
-                  vid={vid} 
+                  className="aspect-[3/4] bg-zinc-900 group relative cursor-pointer overflow-hidden"
                   onClick={() => {
                     setSelectedMediaIndex(idx);
                     setSelectedMedia(vid);
                   }} 
-                />
+                >
+                  <img src={vid.videoUrl} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
+                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
               ))}
             </div>
           ) : (
@@ -534,38 +551,21 @@ export default function Profile() {
               <p className="text-sm font-medium text-center">Nenhum conteúdo publicado ainda.<br/>Toque no "+" para começar!</p>
             </div>
           )
-        ) : activeTab === 'gallery' ? (
-          userPhotos.length > 0 ? (
-            <div className="grid grid-cols-3 gap-0.5">
-              {userPhotos.map((vid, idx) => (
-                <VideoThumbnail 
-                  key={vid.id} 
-                  vid={vid} 
-                  onClick={() => {
-                    setSelectedMediaIndex(idx);
-                    setSelectedMedia(vid);
-                  }} 
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-20 px-6 opacity-30">
-              <ImageIcon size={48} strokeWidth={1} className="mb-4" />
-              <p className="text-sm font-medium text-center">Nenhuma foto na sua galeria.<br/>Poste uma foto no feed!</p>
-            </div>
-          )
         ) : (
-          likedVideos.length > 0 ? (
+          likedPhotos.length > 0 ? (
             <div className="grid grid-cols-3 gap-0.5">
-              {likedVideos.map((vid, idx) => (
-                <VideoThumbnail 
+              {likedPhotos.map((vid, idx) => (
+                <div 
                   key={vid.id} 
-                  vid={vid} 
+                  className="aspect-[3/4] bg-zinc-900 group relative cursor-pointer overflow-hidden"
                   onClick={() => {
                     setSelectedMediaIndex(idx);
                     setSelectedMedia(vid);
                   }} 
-                />
+                >
+                  <img src={vid.videoUrl} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
+                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
               ))}
             </div>
           ) : (
@@ -646,30 +646,11 @@ export default function Profile() {
                 >
                   {!selectedMedia.videoUrl ? (
                     <div className="w-full h-full flex flex-col items-center justify-center bg-zinc-950 text-zinc-600">
-                      <VideoOff size={48} className="opacity-20 mb-4" />
-                      <p className="text-[10px] uppercase tracking-widest font-black">Mídia Indisponível</p>
+                      <ImageIcon size={48} className="opacity-20 mb-4" />
+                      <p className="text-[10px] uppercase tracking-widest font-black">Foto Indisponível</p>
                     </div>
-                  ) : selectedMedia.type === 'photo' || (selectedMedia.videoUrl && (selectedMedia.videoUrl.startsWith('data:image/') || selectedMedia.videoUrl.match(/\.(jpg|jpeg|png|webp|gif|svg)$|dicebear/i))) ? (
-                    <img src={selectedMedia.videoUrl} className="w-full h-full object-cover" draggable={false} />
                   ) : (
-                    <video 
-                      key={selectedMedia.videoUrl}
-                      src={selectedMedia.videoUrl} 
-                      className="w-full h-full object-cover"
-                      autoPlay
-                      loop
-                      playsInline
-                      controls={false}
-                      onClick={(e) => {
-                        const v = e.currentTarget;
-                        if (v.paused) v.play();
-                        else v.pause();
-                      }}
-                      onError={(e) => {
-                        console.warn("Media viewer video error:", e);
-                        // We could show an error state here if we had one for the viewer
-                      }}
-                    />
+                    <img src={selectedMedia.videoUrl} className="w-full h-full object-cover" draggable={false} />
                   )}
                   
                   {/* Swipe indicator */}
@@ -725,12 +706,6 @@ export default function Profile() {
                         <span className="text-[10px] font-black italic tracking-widest">SHARE</span>
                       </div>
                     </div>
-                    
-                    <div className="flex flex-col items-end gap-2">
-                       <div className="px-4 py-2 bg-white text-black rounded-xl font-black uppercase text-[10px] tracking-widest">
-                          {selectedMedia.type === 'video' ? 'VIDEO' : 'STILL'}
-                       </div>
-                    </div>
                   </div>
 
                   <div className="bg-white/5 backdrop-blur-md rounded-[2rem] p-6 border border-white/10">
@@ -739,7 +714,7 @@ export default function Profile() {
                     </p>
                     <div className="flex items-center justify-between">
                       <span className="text-[8px] font-mono text-zinc-500 uppercase tracking-widest">ID: {selectedMedia.id}</span>
-                      <span className="text-[10px] font-black text-pink-500 italic uppercase">#VIBE #PREMIUM</span>
+                      <span className="text-[10px] font-black text-pink-500 italic uppercase">#VIBE #PHOTO</span>
                     </div>
                   </div>
                 </div>
@@ -749,226 +724,22 @@ export default function Profile() {
         )}
       </AnimatePresence>
 
-      {/* Floating Create Menu */}
-      <div className="fixed bottom-24 right-6 z-40">
-        <AnimatePresence>
-          {showCreateMenu && (
-            <div className="absolute bottom-16 right-0 space-y-3 pb-4">
-              <CreateOption 
-                icon={Radio} 
-                label="Abrir Live" 
-                color="bg-red-600" 
-                delay={0}
-                onClick={() => {
-                  setShowCreateMenu(false);
-                  setShowLiveBroadcast(true);
-                }}
-              />
-              <CreateOption 
-                icon={Video} 
-                label="Novo Vídeo" 
-                color="bg-pink-600" 
-                delay={0.05}
-                onClick={() => {
-                  setUploadType('video');
-                  setShowUploadModal(true);
-                  setShowCreateMenu(false);
-                }}
-              />
-              <CreateOption 
-                icon={ImageIcon} 
-                label="Nova Foto" 
-                color="bg-blue-600" 
-                delay={0.1}
-                onClick={() => {
-                  setUploadType('photo');
-                  setShowUploadModal(true);
-                  setShowCreateMenu(false);
-                }}
-              />
-            </div>
-          )}
-        </AnimatePresence>
-
-        <button 
-          onClick={() => setShowCreateMenu(!showCreateMenu)}
-          className={cn(
-            "w-14 h-14 rounded-full flex items-center justify-center shadow-2xl transition-all duration-300",
-            showCreateMenu ? "bg-zinc-800 rotate-45" : "bg-gradient-to-tr from-pink-500 to-violet-600"
-          )}
-        >
-          <Plus size={32} className="text-white" />
-        </button>
-      </div>
-
-      {/* Upload Modal */}
-      <AnimatePresence>
-        {showUploadModal && (
-          <motion.div 
-            initial={{ opacity: 0, y: 100 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 100 }}
-            className="fixed inset-0 bg-black z-[60] flex flex-col"
+      {/* Floating Plus Button */}
+      {isOwnProfile && (
+        <div className="fixed bottom-24 right-6 z-40">
+          <button 
+            onClick={() => setShowUploadModal(true)}
+            className="w-14 h-14 rounded-full flex items-center justify-center shadow-2xl bg-gradient-to-tr from-pink-500 to-violet-600 active:scale-95 transition-all"
           >
-            <div className="p-6 flex justify-between items-center border-b border-white/10 shrink-0">
-              <button 
-                onClick={() => {
-                  setShowUploadModal(false);
-                  setPreviewFile(null);
-                  setUploadCaption('');
-                }} 
-                className="p-2 bg-zinc-900 rounded-xl"
-              >
-                <X size={24} />
-              </button>
-              <h2 className="text-lg font-black uppercase tracking-tighter italic">
-                {previewFile ? 'Confirmar Post' : `Novo ${uploadType === 'video' ? 'Vídeo' : 'Foto'}`}
-              </h2>
-              <div className="w-10" />
-            </div>
+            <Plus size={32} className="text-white" />
+          </button>
+        </div>
+      )}
 
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {isSuccess ? (
-                <div className="flex-1 flex flex-col items-center justify-center space-y-8">
-                  <motion.div 
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1, rotate: [0, 10, 0] }}
-                    className="w-32 h-32 bg-green-500 rounded-full flex items-center justify-center shadow-[0_0_50px_rgba(34,197,94,0.4)]"
-                  >
-                    <motion.div
-                      initial={{ pathLength: 0 }}
-                      animate={{ pathLength: 1 }}
-                      transition={{ duration: 0.5, delay: 0.2 }}
-                    >
-                      <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    </motion.div>
-                  </motion.div>
-                  <div className="text-center">
-                    <h3 className="text-2xl font-black italic uppercase tracking-tighter mb-2">Publicado!</h3>
-                    <p className="text-zinc-500 font-medium">Seu conteúdo já está no seu perfil e no feed.</p>
-                  </div>
-                </div>
-              ) : !previewFile ? (
-                <div 
-                  {...getRootProps()} 
-                  className={cn(
-                    "border-2 border-dashed rounded-[2.5rem] p-12 flex flex-col items-center justify-center text-center transition-all cursor-pointer aspect-square bg-zinc-950/50 relative overflow-hidden",
-                    isDragActive ? "border-pink-500 bg-pink-500/5" : "border-zinc-800 hover:border-zinc-700"
-                  )}
-                >
-                  <input {...getInputProps()} />
-                  
-                  {isProcessing ? (
-                    <div className="flex flex-col items-center z-10 w-full px-6">
-                      <div className="w-20 h-20 bg-pink-500/10 rounded-3xl flex items-center justify-center mb-6 shadow-xl border border-pink-500/20">
-                        <Loader2 size={40} className="text-pink-500 animate-spin" />
-                      </div>
-                      <p className="text-lg font-black mb-2 italic">A Processar...</p>
-                      <div className="w-full h-2 bg-zinc-900 rounded-full overflow-hidden mt-4">
-                        <motion.div 
-                          initial={{ width: 0 }}
-                          animate={{ width: `${uploadProgress}%` }}
-                          className="h-full bg-pink-500"
-                        />
-                      </div>
-                      <p className="text-[10px] text-zinc-500 font-bold mt-2 uppercase tracking-widest">{uploadProgress}% concluído</p>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="w-24 h-24 bg-zinc-900 rounded-3xl flex items-center justify-center mb-6 shadow-xl">
-                        <Upload size={40} className="text-zinc-500" />
-                      </div>
-                      <p className="text-lg font-black mb-2 italic">
-                        {isDragActive ? 'Solte para Publicar' : `Escolha seu ${uploadType === 'video' ? 'Vídeo' : 'Foto'}`}
-                      </p>
-                      <p className="text-sm text-zinc-600 font-medium">
-                        Toque para abrir a sua galeria
-                      </p>
-                    </>
-                  )}
-                </div>
-              ) : (
-                <div className="space-y-8">
-                  {/* Preview Media */}
-                  <div className="relative aspect-[3/4] rounded-[2.5rem] overflow-hidden bg-zinc-900 border-2 border-white/5 shadow-2xl">
-                    {uploadType === 'video' ? (
-                      <video 
-                        src={previewFile} 
-                        className="w-full h-full object-cover" 
-                        autoPlay 
-                        muted 
-                        loop 
-                      />
-                    ) : (
-                      <img src={previewFile} className="w-full h-full object-cover" />
-                    )}
-                    <button 
-                      onClick={() => setPreviewFile(null)}
-                      className="absolute top-4 right-4 p-2 bg-black/60 backdrop-blur-md rounded-xl border border-white/10 hover:bg-black/80 transition-colors"
-                    >
-                      <X size={18} />
-                    </button>
-                  </div>
-
-                  {/* Caption Input */}
-                  <div className="space-y-3">
-                    <label className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.3em] px-1">Legenda do Post</label>
-                    <textarea 
-                      value={uploadCaption}
-                      onChange={(e) => setUploadCaption(e.target.value)}
-                      placeholder="Escreve algo sobre isto... #vibe #night"
-                      rows={4}
-                      maxLength={150}
-                      className="w-full bg-zinc-900/50 border-2 border-zinc-800 focus:border-pink-500 outline-none rounded-2xl p-5 transition-all resize-none font-medium placeholder:text-zinc-700"
-                    />
-                    <div className="flex justify-end px-1">
-                      <span className={cn(
-                        "text-[10px] font-bold tracking-widest",
-                        uploadCaption.length >= 150 ? "text-red-500" : "text-zinc-600"
-                      )}>
-                        {uploadCaption.length}/150
-                      </span>
-                    </div>
-                  </div>
-
-                  <button 
-                    onClick={handlePublish}
-                    disabled={isUploading}
-                    className={cn(
-                      "w-full py-5 rounded-2xl font-black uppercase tracking-widest text-sm shadow-xl active:scale-95 transition-all flex items-center justify-center gap-3 relative overflow-hidden",
-                      isUploading 
-                        ? "bg-zinc-800 text-zinc-500 cursor-not-allowed" 
-                        : "bg-gradient-to-tr from-pink-600 to-blue-600 text-white shadow-pink-600/20"
-                    )}
-                  >
-                    {isUploading && (
-                      <motion.div 
-                        initial={{ x: '-100%' }}
-                        animate={{ x: '100%' }}
-                        transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
-                        className="absolute inset-0 bg-white/10"
-                      />
-                    )}
-                    {isUploading ? (
-                      <>
-                        <Loader2 size={24} className="animate-spin" />
-                        A publicar...
-                      </>
-                    ) : (
-                      <>
-                        Publicar no Feed
-                        <ChevronRight size={20} />
-                      </>
-                    )}
-                  </button>
-                </div>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <PhotoUploadModal 
+        isOpen={showUploadModal}
+        onClose={() => setShowUploadModal(false)}
+      />
 
       {/* Edit Modal */}
       <AnimatePresence>
@@ -1032,15 +803,15 @@ export default function Profile() {
               {/* Photo Edit */}
               <div className="px-6 -mt-16 relative z-10 flex flex-col items-center">
                 <div 
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => avatarInputRef.current?.click()}
                   className="relative group w-40 h-40 cursor-pointer"
                 >
                   <input 
                     type="file" 
-                    ref={fileInputRef} 
+                    ref={avatarInputRef} 
                     className="hidden" 
                     accept="image/*"
-                    onChange={(e) => handleFileUpload(e, 'profile')}
+                    onChange={(e) => handleFileUpload(e, 'avatar')}
                   />
                   <div className="w-full h-full rounded-[3.5rem] border-8 border-black bg-zinc-900 p-1 overflow-hidden shadow-2xl relative">
                     <img 
@@ -1252,14 +1023,6 @@ export default function Profile() {
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {showLiveBroadcast && (
-          <LiveBroadcast 
-            onClose={() => setShowLiveBroadcast(false)}
-          />
-        )}
-      </AnimatePresence>
-
       <CameraModal 
         isOpen={showCamera}
         onClose={() => setShowCamera(false)}
@@ -1283,68 +1046,5 @@ function SettingItem({ icon: Icon, label, onClick, textColor = "text-white" }: {
       </div>
       <ChevronRight size={20} className="text-zinc-600" />
     </button>
-  );
-}
-
-function CreateOption({ icon: Icon, label, color, onClick, delay }: { icon: any, label: string, color: string, onClick: () => void, delay: number }) {
-  return (
-    <motion.button
-      initial={{ opacity: 0, x: 20 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: 20 }}
-      transition={{ delay }}
-      onClick={onClick}
-      className="flex items-center gap-3 group ml-auto"
-    >
-      <span className="bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-bold text-white opacity-0 group-hover:opacity-100 transition-opacity border border-white/10 uppercase tracking-widest leading-none">
-        {label}
-      </span>
-      <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg transform group-hover:scale-110 transition-transform", color)}>
-        <Icon size={20} className="text-white" />
-      </div>
-    </motion.button>
-  );
-}
-
-function VideoThumbnail({ vid, onClick }: { vid: any, onClick: () => void }) {
-  const [hasError, setHasError] = useState(false);
-  const isPhoto = vid.type === 'photo' || (vid.videoUrl && (vid.videoUrl.startsWith('data:image/') || vid.videoUrl.match(/\.(jpg|jpeg|png|webp|gif|svg)$|dicebear/i)));
-
-  return (
-    <div key={vid.id} onClick={onClick} className="aspect-[3/4] bg-zinc-900 overflow-hidden relative group cursor-pointer">
-      {!vid.videoUrl || hasError ? (
-        <div className="w-full h-full flex flex-col items-center justify-center bg-zinc-950">
-          <ImageIcon size={24} className="text-zinc-800/50 mb-1" />
-          <span className="text-[6px] text-zinc-800 uppercase font-black">Link Erro</span>
-        </div>
-      ) : isPhoto ? (
-        <img 
-          src={vid.videoUrl || undefined} 
-          className="w-full h-full object-cover opacity-60"
-          onError={() => setHasError(true)}
-        />
-      ) : (
-        <video 
-          key={vid.videoUrl}
-          src={vid.videoUrl || undefined} 
-          className="w-full h-full object-cover opacity-60"
-          muted
-          playsInline
-          loop
-          onLoadedData={(e) => {
-            const video = e.currentTarget;
-            video.play().catch(() => {});
-          }}
-          onError={() => setHasError(true)}
-        />
-      )}
-      <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40">
-        <Play size={20} className="text-white fill-white" />
-      </div>
-      <div className="absolute bottom-2 left-2 flex items-center gap-1 text-[10px] font-bold">
-        <Heart size={10} className="fill-white" />
-        {vid.likesCount || 0}
-      </div>
-    </div>
   );
 }

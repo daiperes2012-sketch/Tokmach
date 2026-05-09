@@ -113,7 +113,7 @@ export default function LiveBroadcast({ onClose }: { onClose: () => void }) {
     if (!inputText.trim()) return;
     
     const newMessage: Message = {
-      id: Date.now().toString(),
+      id: (Date.now() + Math.random()).toString(),
       user: 'Eu (Host)',
       text: inputText,
       color: 'text-pink-500 font-bold'

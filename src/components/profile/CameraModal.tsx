@@ -11,16 +11,10 @@ interface CameraModalProps {
 }
 
 export default function CameraModal({ isOpen, onClose, onCapture }: CameraModalProps) {
-  const [mode, setMode] = useState<'photo' | 'video'>('photo');
-  const [isRecording, setIsRecording] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [flash, setFlash] = useState(false);
-  const [recordingTime, setRecordingTime] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -42,7 +36,7 @@ export default function CameraModal({ isOpen, onClose, onCapture }: CameraModalP
           width: { ideal: 1080 },
           height: { ideal: 1920 }
         },
-        audio: mode === 'video'
+        audio: false // No audio needed for photos
       });
       setStream(newStream);
       if (videoRef.current) {
@@ -57,9 +51,6 @@ export default function CameraModal({ isOpen, onClose, onCapture }: CameraModalP
     if (stream) {
       stream.getTracks().forEach(track => track.stop());
       setStream(null);
-    }
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
     }
   };
 
@@ -86,90 +77,6 @@ export default function CameraModal({ isOpen, onClose, onCapture }: CameraModalP
     const compressed = await compressImage(dataUrl);
     onCapture(compressed, 'photo');
     onClose();
-  };
-
-  const startRecording = () => {
-    if (!stream) return;
-    setIsRecording(true);
-    setRecordingTime(0);
-    chunksRef.current = [];
-    
-    const recorder = new MediaRecorder(stream, {
-      mimeType: 'video/webm;codecs=vp8'
-    });
-
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) {
-        chunksRef.current.push(e.data);
-      }
-    };
-
-    recorder.onstop = async () => {
-      const mimeTypeToUse = recorder.mimeType || 'video/webm';
-      const blob = new Blob(chunksRef.current, { type: mimeTypeToUse });
-      const file = new File([blob], 'captured_video.webm', { type: mimeTypeToUse });
-      
-      // Since video capture can be heavy, always try to use the compression logic 
-      // if it's over 300KB to ensure we stay under Firestore limits.
-      if (blob.size > 300000) {
-        try {
-          // Pass dummy progress for now or add a message
-          const compressed = await compressVideo(file, () => {});
-          onCapture(compressed, 'video');
-          onClose();
-        } catch (err) {
-          console.error("Camera compression error:", err);
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            onCapture(reader.result as string, 'video');
-            onClose();
-          };
-          reader.readAsDataURL(blob);
-        }
-      } else {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          onCapture(reader.result as string, 'video');
-          onClose();
-        };
-        reader.readAsDataURL(blob);
-      }
-    };
-
-    mediaRecorderRef.current = recorder;
-    recorder.start();
-
-    timerRef.current = setInterval(() => {
-      setRecordingTime(prev => {
-        if (prev >= 30) {
-          stopRecording();
-          return 30;
-        }
-        return prev + 1;
-      });
-    }, 1000);
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-    }
-  };
-
-  const handleCaptureClick = () => {
-    if (mode === 'photo') {
-      capturePhoto();
-    } else {
-      if (isRecording) {
-        stopRecording();
-      } else {
-        startRecording();
-      }
-    }
   };
 
   return (
@@ -202,13 +109,6 @@ export default function CameraModal({ isOpen, onClose, onCapture }: CameraModalP
                   <X size={24} />
                 </button>
                 
-                {isRecording && (
-                  <div className="flex items-center gap-2 bg-red-500 px-4 py-1.5 rounded-full font-black text-sm">
-                    <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
-                    {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
-                  </div>
-                )}
-
                 <div className="flex gap-3">
                   <button onClick={() => setFlash(!flash)} className={cn("p-3 bg-black/20 backdrop-blur-md rounded-2xl border border-white/10", flash && "text-yellow-400 border-yellow-400/50")}>
                     <Zap size={24} />
@@ -221,42 +121,15 @@ export default function CameraModal({ isOpen, onClose, onCapture }: CameraModalP
 
               {/* Bottom Controls */}
               <div className="flex flex-col items-center gap-8 pointer-events-auto">
-                {/* Mode Selector */}
-                {!isRecording && (
-                  <div className="flex bg-black/40 backdrop-blur-xl p-1 rounded-2xl border border-white/10">
-                    <button 
-                      onClick={() => setMode('photo')}
-                      className={cn(
-                        "px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all",
-                        mode === 'photo' ? "bg-white text-black" : "text-white/40"
-                      )}
-                    >
-                      Foto
-                    </button>
-                    <button 
-                      onClick={() => setMode('video')}
-                      className={cn(
-                        "px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all",
-                        mode === 'video' ? "bg-white text-black" : "text-white/40"
-                      )}
-                    >
-                      Vídeo
-                    </button>
-                  </div>
-                )}
-
                 {/* Capture Button */}
                 <div className="flex items-center justify-center w-full">
                   <button 
-                    onClick={handleCaptureClick}
+                    onClick={capturePhoto}
                     className="relative flex items-center justify-center group"
                   >
                     <div className="absolute inset-0 bg-white/20 rounded-full scale-125 blur-sm opacity-0 group-hover:opacity-100 transition-opacity" />
                     <div className="w-20 h-20 border-4 border-white rounded-full flex items-center justify-center p-1">
-                      <div className={cn(
-                        "w-full h-full rounded-full transition-all duration-300",
-                        mode === 'photo' ? "bg-white" : isRecording ? "bg-red-500 scale-50 rounded-lg" : "bg-red-500"
-                      )} />
+                      <div className="w-full h-full rounded-full transition-all duration-300 bg-white" />
                     </div>
                   </button>
                 </div>

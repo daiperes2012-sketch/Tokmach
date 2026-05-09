@@ -34,7 +34,15 @@ function AppContent() {
   const { user, loading, login, isQuotaExceeded } = useAuth();
   const { permission, requestPermission } = useNotifications();
   const [activeTab, setActiveTab] = useState<'feed' | 'match' | 'messages' | 'profile' | 'store'>('feed');
+  const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  
+  // Helper to open a specific profile
+  const openProfile = (uid: string) => {
+    setProfileUserId(uid);
+    setActiveTab('profile');
+  };
+
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginMethod, setLoginMethod] = useState<'options'>('options');
 
@@ -244,24 +252,39 @@ function AppContent() {
     );
   }
 
+  const handleTabChange = (tab: any) => {
+    if (tab === 'profile') {
+      setProfileUserId(null);
+    }
+    setActiveTab(tab);
+  };
+
   return (
     <div className="flex flex-col h-screen bg-black text-white overflow-hidden max-w-md mx-auto relative shadow-2xl">
-      <main className="flex-1 overflow-y-auto pb-20 no-scrollbar">
-        <AnimatePresence mode="wait">
+      <main className="flex-1 overflow-y-auto pb-20 no-scrollbar relative">
+        <AnimatePresence initial={false}>
           <motion.div
-            key={activeTab}
-            initial={{ opacity: 0, x: 20 }}
+            key={activeTab + (activeTab === 'profile' ? (profileUserId || 'self') : '')}
+            initial={{ opacity: 0, x: 10 }}
             animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -20 }}
-            transition={{ duration: 0.2 }}
-            className="h-full"
+            exit={{ opacity: 0, x: -10 }}
+            transition={{ duration: 0.15, ease: "easeOut" }}
+            className="h-full w-full absolute inset-0"
           >
             <ErrorBoundary>
               <Suspense fallback={<ViewLoader />}>
-                {activeTab === 'feed' && <Feed />}
+                {activeTab === 'feed' && <Feed openProfile={openProfile} />}
                 {activeTab === 'match' && <Match />}
                 {activeTab === 'messages' && <Messages />}
-                {activeTab === 'profile' && <Profile />}
+                {activeTab === 'profile' && (
+                  <Profile 
+                    targetUserId={profileUserId} 
+                    onBack={() => {
+                      setProfileUserId(null);
+                      setActiveTab('feed');
+                    }} 
+                  />
+                )}
                 {activeTab === 'store' && <Store />}
               </Suspense>
             </ErrorBoundary>
@@ -269,7 +292,7 @@ function AppContent() {
         </AnimatePresence>
       </main>
 
-      <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
+      <Navigation activeTab={activeTab} setActiveTab={handleTabChange} />
     </div>
   );
 }

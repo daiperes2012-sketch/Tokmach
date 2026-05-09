@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, memo } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { useToast } from '../../hooks/useToast';
 import { 
@@ -33,7 +33,8 @@ import {
   Loader2,
   MicOff,
   CheckCheck,
-  Smile
+  Smile,
+  Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { formatDistanceToNow } from 'date-fns';
@@ -41,31 +42,47 @@ import { ptBR } from 'date-fns/locale';
 import { translateText } from '../../services/translationService';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import CameraModal from '../profile/CameraModal';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-function ThreadItem({ thread, userId, onClick }: { thread: ChatThread, userId: string, onClick: () => void }) {
-  const [partner, setPartner] = useState<UserProfile | null>(null);
+// Simple global cache for user profiles to avoid redundant fetches across items
+const profileCache: Record<string, UserProfile> = {};
+
+const ThreadItem = memo(function ThreadItem({ thread, userId, onClick }: { thread: ChatThread, userId: string, onClick: () => void }) {
+  const [partner, setPartner] = useState<UserProfile | null>(profileCache[thread.participants.find(p => p !== userId) || ''] || null);
   const partnerId = thread.participants.find(p => p !== userId);
 
   useEffect(() => {
     if (!partnerId) return;
+    
+    // Check cache first
+    if (profileCache[partnerId]) {
+      setPartner(profileCache[partnerId]);
+      return;
+    }
+
     if (partnerId === 'system_bot') {
-      setPartner({ 
+      const botProfile = { 
         displayName: 'Suporte Vibe', 
         photoURL: 'https://api.dicebear.com/7.x/bottts/svg?seed=vibe',
         uid: 'system_bot'
-      } as UserProfile);
+      } as UserProfile;
+      profileCache[partnerId] = botProfile;
+      setPartner(botProfile);
       return;
     }
+
     const fetchPartner = async () => {
       try {
         const docRef = doc(db, 'users', partnerId);
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
-          setPartner(docSnap.data() as UserProfile);
+          const data = docSnap.data() as UserProfile;
+          profileCache[partnerId] = data; // Save to cache
+          setPartner(data);
         }
       } catch (error) {
         handleFirestoreError(error, OperationType.GET, `users/${partnerId}`);
@@ -110,7 +127,7 @@ function ThreadItem({ thread, userId, onClick }: { thread: ChatThread, userId: s
       </div>
     </motion.button>
   );
-}
+});
 
 export default function Messages() {
   const { user } = useAuth();
@@ -129,7 +146,15 @@ export default function Messages() {
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setThreads(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ChatThread[]);
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ChatThread[];
+      // Deduplicate by ID
+      const seen = new Set();
+      const uniqueThreads = data.filter(t => {
+        if (seen.has(t.id)) return false;
+        seen.add(t.id);
+        return true;
+      });
+      setThreads(uniqueThreads);
       setLoading(false);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'chats');
@@ -148,7 +173,16 @@ export default function Messages() {
       const users = snapshot.docs
         .map(doc => ({ uid: doc.id, ...doc.data() } as UserProfile))
         .filter(u => u.uid !== user.uid);
-      setRecentUsers(users);
+      
+      // Deduplicate by UID
+      const seen = new Set();
+      const uniqueUsers = users.filter(u => {
+        if (seen.has(u.uid)) return false;
+        seen.add(u.uid);
+        return true;
+      });
+      
+      setRecentUsers(uniqueUsers);
     });
     return () => unsubscribe();
   }, [user]);
@@ -332,6 +366,20 @@ function MessageItem({ msg, isMine }: { msg: ChatMessage, isMine: boolean }) {
               className="max-w-full rounded-2xl mb-1 cursor-pointer hover:opacity-90 transition-opacity" 
               onClick={() => window.open(msg.text, '_blank')}
             />
+          ) : msg.type === 'audio' ? (
+            <div className="flex items-center gap-3 py-1 min-w-[200px]">
+              <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center shrink-0">
+                <Mic size={18} className={isMine ? "text-white" : "text-pink-500"} />
+              </div>
+              <audio 
+                src={msg.text} 
+                controls 
+                className={cn(
+                  "h-8 max-w-[180px]",
+                  isMine ? "brightness-200 hue-rotate-180 invert" : "invert brightness-90 grayscale"
+                )} 
+              />
+            </div>
           ) : (
             translatedText || msg.text
           )}
@@ -378,6 +426,89 @@ function ChatRoom({ chatId, onBack }: { chatId: string, onBack: () => void }) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [showMediaMenu, setShowMediaMenu] = useState(false);
+  const [showCamera, setShowCamera] = useState(false);
+  
+  // Audio recording states
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<number | null>(null);
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const base64Audio = reader.result as string;
+          await sendAudio(base64Audio);
+        };
+        reader.readAsDataURL(audioBlob);
+        
+        // Stop all tracks to release the microphone
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      recorder.start();
+      setIsRecording(true);
+      setRecordingDuration(0);
+      timerRef.current = window.setInterval(() => {
+        setRecordingDuration(prev => prev + 1);
+      }, 1000);
+    } catch (error) {
+      console.error('Error starting recording:', error);
+      toast('error', 'Não foi possível acessar o microfone.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    }
+  };
+
+  const sendAudio = async (base64: string) => {
+    if (!user) return;
+    try {
+      await addDoc(collection(db, 'chats', chatId, 'messages'), {
+        chatId,
+        senderId: user.uid,
+        text: base64,
+        type: 'audio',
+        createdAt: serverTimestamp()
+      });
+      await updateDoc(doc(db, 'chats', chatId), {
+        lastMessage: '🎤 Áudio',
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `chats/${chatId}/messages`);
+    }
+  };
+
+  const formatDuration = (seconds: number) => {
+    const min = Math.floor(seconds / 60);
+    const sec = seconds % 60;
+    return `${min}:${sec.toString().padStart(2, '0')}`;
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -418,6 +549,13 @@ function ChatRoom({ chatId, onBack }: { chatId: string, onBack: () => void }) {
       setIsUploading(false);
     };
     reader.readAsDataURL(file);
+    // Reset input
+    if (imageInputRef.current) imageInputRef.current.value = '';
+  };
+
+  const handleCameraCapture = (dataUrl: string) => {
+    sendImage(dataUrl);
+    setShowCamera(false);
   };
 
   useEffect(() => {
@@ -578,50 +716,107 @@ function ChatRoom({ chatId, onBack }: { chatId: string, onBack: () => void }) {
               accept="image/*"
               onChange={handleImageUpload}
             />
+            {isRecording ? (
+              <div className="flex-1 flex items-center px-4 py-3 gap-3">
+                <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                <span className="text-xs font-black text-white/40 uppercase tracking-widest">{formatDuration(recordingDuration)}</span>
+                <span className="text-xs font-medium text-white/20 italic">Gravando áudio...</span>
+              </div>
+            ) : (
+              <>
+                <div className="relative">
+                  <AnimatePresence>
+                    {showMediaMenu && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                        className="absolute bottom-full left-0 mb-4 bg-zinc-900 border border-white/10 rounded-[1.5rem] p-2 shadow-2xl flex flex-col gap-1 min-w-[140px] z-[120]"
+                      >
+                        <button 
+                          onClick={() => {
+                            setShowCamera(true);
+                            setShowMediaMenu(false);
+                          }}
+                          className="flex items-center gap-3 w-full p-3 hover:bg-white/5 rounded-xl transition-colors text-white"
+                        >
+                          <Camera size={18} className="text-pink-500" />
+                          <span className="text-[11px] font-black uppercase tracking-widest">Câmera</span>
+                        </button>
+                        <button 
+                          onClick={() => {
+                            imageInputRef.current?.click();
+                            setShowMediaMenu(false);
+                          }}
+                          className="flex items-center gap-3 w-full p-3 hover:bg-white/5 rounded-xl transition-colors text-white"
+                        >
+                          <ImageIcon size={18} className="text-violet-500" />
+                          <span className="text-[11px] font-black uppercase tracking-widest">Galeria</span>
+                        </button>
+                        <div className="absolute w-4 h-4 bg-zinc-900 border-r border-b border-white/10 rotate-45 -bottom-2 left-4" />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                  
+                  <button 
+                    onClick={() => setShowMediaMenu(!showMediaMenu)}
+                    className={cn(
+                      "w-11 h-11 flex items-center justify-center transition-colors",
+                      showMediaMenu ? "text-pink-500" : "text-zinc-500 hover:text-white"
+                    )}
+                  >
+                    {isUploading ? <Loader2 size={21} className="animate-spin text-pink-500" /> : <Camera size={21} />}
+                  </button>
+                </div>
+                <textarea
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendMessage();
+                    }
+                  }}
+                  rows={1}
+                  placeholder="Mensagem..."
+                  className="flex-1 bg-transparent py-3.5 text-[15px] outline-none px-2 resize-none max-h-32 text-zinc-200 placeholder:text-zinc-600"
+                />
+                <button 
+                  onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                  className={cn("w-11 h-11 flex items-center justify-center transition-colors", showEmojiPicker ? "text-pink-500" : "text-zinc-500 hover:text-white")}
+                >
+                  <Smile size={21} />
+                </button>
+                <button className="w-11 h-11 flex items-center justify-center text-zinc-500 hover:text-white transition-colors">
+                  <Gift size={21} />
+                </button>
+              </>
+            )}
+            
             <button 
-              onClick={() => imageInputRef.current?.click()}
-              className="w-11 h-11 flex items-center justify-center text-zinc-500 hover:text-white transition-colors"
+              onClick={isRecording ? stopRecording : startRecording}
+              className={cn(
+                "w-11 h-11 flex items-center justify-center transition-all rounded-full",
+                isRecording ? "bg-red-500 text-white animate-pulse" : "text-zinc-500 hover:text-white hover:bg-white/5"
+              )}
             >
-              {isUploading ? <Loader2 size={21} className="animate-spin text-pink-500" /> : <Camera size={21} />}
-            </button>
-            <textarea
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  sendMessage();
-                }
-              }}
-              rows={1}
-              placeholder="Mensagem..."
-              className="flex-1 bg-transparent py-3.5 text-[15px] outline-none px-2 resize-none max-h-32 text-zinc-200 placeholder:text-zinc-600"
-            />
-            <button 
-              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-              className={cn("w-11 h-11 flex items-center justify-center transition-colors", showEmojiPicker ? "text-pink-500" : "text-zinc-500 hover:text-white")}
-            >
-              <Smile size={21} />
-            </button>
-            <button className="w-11 h-11 flex items-center justify-center text-zinc-500 hover:text-white transition-colors">
-              <Gift size={21} />
-            </button>
-            <button className="w-11 h-11 flex items-center justify-center text-zinc-500 hover:text-white transition-colors">
-              <Mic size={21} />
+              {isRecording ? <MicOff size={21} /> : <Mic size={21} />}
             </button>
           </div>
-          <button 
-            onClick={sendMessage}
-            disabled={!inputText.trim()}
-            className={cn(
-              "w-14 h-14 rounded-[1.25rem] transition-all active:scale-90 flex items-center justify-center shadow-lg",
-              inputText.trim() 
-                ? "bg-pink-600 text-white shadow-pink-900/20" 
-                : "bg-zinc-900 text-zinc-700"
-            )}
-          >
-            <Send size={22} className={cn("transition-transform", inputText.trim() ? "translate-x-0.5 -translate-y-0.5" : "")} />
-          </button>
+          {!isRecording && (
+            <button 
+              onClick={sendMessage}
+              disabled={!inputText.trim()}
+              className={cn(
+                "w-14 h-14 rounded-[1.25rem] transition-all active:scale-90 flex items-center justify-center shadow-lg",
+                inputText.trim() 
+                  ? "bg-pink-600 text-white shadow-pink-900/20" 
+                  : "bg-zinc-900 text-zinc-700"
+              )}
+            >
+              <Send size={22} className={cn("transition-transform", inputText.trim() ? "translate-x-0.5 -translate-y-0.5" : "")} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -690,6 +885,12 @@ function ChatRoom({ chatId, onBack }: { chatId: string, onBack: () => void }) {
           </motion.div>
         )}
       </AnimatePresence>
+      {/* Camera Modal for Chat */}
+      <CameraModal 
+        isOpen={showCamera}
+        onClose={() => setShowCamera(false)}
+        onCapture={handleCameraCapture}
+      />
     </div>
   );
 }

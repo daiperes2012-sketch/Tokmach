@@ -57,8 +57,14 @@ service cloud.firestore {
       // If public data is needed, use a sub-collection "public" per Pillar 6.
       allow read: if isSignedIn() && (isOwner(userId) || isAdmin() || existing().isPublic == true);
       allow create: if isOwner(userId) && isValidUser(incoming());
-      allow update: if isOwner(userId) && isValidUser(incoming()) && 
-                    incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'bio', 'isPublic', 'updatedAt']);
+      allow update: if isSignedIn() && (
+        (isOwner(userId) && isValidUser(incoming()) && 
+         incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'bio', 'isPublic', 'updatedAt'])) ||
+        // Action: Anyone increments followersCount/followingCount
+        (incoming().diff(existing()).affectedKeys().hasOnly(['followersCount', 'followingCount']) && 
+         incoming().followersCount is int && incoming().followingCount is int) ||
+        isAdmin()
+      );
       allow delete: if isAdmin(); // Users usually shouldn't delete profiles in this app without request
     }
 
@@ -66,8 +72,8 @@ service cloud.firestore {
     match /videos/{videoId} {
       function isValidVideo(data) {
         return data.creatorId == request.auth.uid &&
-               data.videoUrl is string && data.videoUrl.size() <= 2000 &&
-               data.description is string && data.description.size() <= 500 &&
+               data.videoUrl is string && data.videoUrl.size() <= 1048576 &&
+               data.description is string && data.description.size() <= 1000 &&
                (data.type == 'video' || data.type == 'photo' || data.type == 'live');
       }
 
@@ -174,6 +180,20 @@ service cloud.firestore {
                    (isAdmin() || resource.data.participants.hasAny([request.auth.uid]));
       allow get: if isSignedIn() && 
                    (isAdmin() || resource.data.participants.hasAny([request.auth.uid]));
+    }
+
+    // 8. Follows Rules
+    match /follows/{followId} {
+      function isValidFollow(data) {
+        return data.followerId == request.auth.uid &&
+               data.followedId is string &&
+               data.followedId != request.auth.uid &&
+               data.followedId.size() <= 128;
+      }
+      allow list: if isSignedIn();
+      allow get: if isSignedIn();
+      allow create: if isSignedIn() && isValidFollow(incoming()) && isValidId(followId);
+      allow delete: if isSignedIn() && (isAdmin() || existing().followerId == request.auth.uid);
     }
   }
 }
