@@ -115,7 +115,7 @@ export async function compressImage(base64Str: string, filterStr: string = 'none
     img.src = base64Str;
     img.onload = () => {
       const canvas = document.createElement('canvas');
-      const MAX_DIMENSION = 1600; 
+      const MAX_DIMENSION = 1200; 
       let width = img.width;
       let height = img.height;
 
@@ -139,10 +139,11 @@ export async function compressImage(base64Str: string, filterStr: string = 'none
         ctx.drawImage(img, 0, 0, width, height);
       }
       
-      let quality = 0.8;
+      let quality = 0.7;
       let result = canvas.toDataURL('image/jpeg', quality);
       
-      while (result.length > 900000 && quality > 0.1) {
+      // Target around 800KB to leave room for other fields in the Firestore doc
+      while (result.length > 800000 && quality > 0.1) {
         quality -= 0.1;
         result = canvas.toDataURL('image/jpeg', quality);
       }

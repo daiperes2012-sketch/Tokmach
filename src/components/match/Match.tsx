@@ -478,7 +478,7 @@ export default function Match() {
                 <div className="flex items-center justify-center gap-2 mb-4">
                   <div className="flex -space-x-2">
                     {[1, 2, 3].map((i) => (
-                      <div key={i} className="w-6 h-6 rounded-full border-2 border-zinc-950 overflow-hidden">
+                      <div key={`online-user-${i}`} className="w-6 h-6 rounded-full border-2 border-zinc-950 overflow-hidden">
                         <img 
                           src={`https://i.pravatar.cc/100?u=match${i}${isNaughtyMode ? 'n' : 'p'}`} 
                           className="w-full h-full object-cover"
@@ -549,7 +549,7 @@ export default function Match() {
                   </div>
                   <div className="flex gap-3 overflow-x-auto pb-4 no-scrollbar">
                     {[1, 2, 3, 4].map((i) => (
-                      <div key={i} className="min-w-[100px] aspect-[3/4] bg-zinc-900 rounded-2xl overflow-hidden border border-white/5 relative group cursor-pointer active:scale-95 transition-transform">
+                      <div key={`highlight-${i}`} className="min-w-[100px] aspect-[3/4] bg-zinc-900 rounded-2xl overflow-hidden border border-white/5 relative group cursor-pointer active:scale-95 transition-transform">
                         <img 
                           src={`https://images.unsplash.com/photo-${1500000000000 + i * 100000000}?auto=compress&cs=tinysrgb&w=300&h=400&fit=crop`} 
                           className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity" 
@@ -867,7 +867,7 @@ function ConnectionIndicator({ quality, size = 'md' }: { quality: 'poor' | 'fair
     <div className="flex items-end gap-1 h-3">
       {[1, 2, 3, 4].map((i) => (
         <div
-          key={i}
+          key={`bar-${i}`}
           className={cn(
             "rounded-full transition-all duration-500",
             size === 'sm' ? "w-1" : "w-1.5",

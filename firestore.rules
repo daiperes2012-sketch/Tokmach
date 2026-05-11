@@ -72,7 +72,7 @@ service cloud.firestore {
     match /videos/{videoId} {
       function isValidVideo(data) {
         return data.creatorId == request.auth.uid &&
-               data.videoUrl is string && data.videoUrl.size() <= 1048576 &&
+               data.videoUrl is string && data.videoUrl.size() <= 900000 &&
                data.description is string && data.description.size() <= 1000 &&
                (data.type == 'video' || data.type == 'photo' || data.type == 'live');
       }
@@ -133,7 +133,7 @@ service cloud.firestore {
         function isValidMessage(data) {
           return data.chatId == chatId &&
                  data.senderId == request.auth.uid &&
-                 data.text is string && data.text.size() <= 5000;
+                 data.text is string && data.text.size() <= 1000000;
         }
         allow get, list: if isSignedIn() && canAccessChat();
         allow create: if isSignedIn() && 
@@ -145,7 +145,7 @@ service cloud.firestore {
 
     // 4. Match Rules
     match /matches/{matchId} {
-      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn(); // Allow searching for other users with status 'searching'
       allow get: if isSignedIn() && (isAdmin() || existing().userId == request.auth.uid);
       allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidId(matchId);
       allow update: if isSignedIn() && (isAdmin() || existing().userId == request.auth.uid);

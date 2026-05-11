@@ -272,7 +272,7 @@ export default function Messages() {
           <div className="flex gap-4 overflow-x-auto no-scrollbar py-1">
             {recentUsers.length === 0 ? (
               [1, 2, 3, 4, 5].map(i => (
-                <div key={i} className="w-16 h-16 rounded-[22px] bg-zinc-900 animate-pulse shrink-0" />
+                <div key={`messages-skeleton-user-${i}`} className="w-16 h-16 rounded-[22px] bg-zinc-900 animate-pulse shrink-0" />
               ))
             ) : (
               recentUsers.map(profile => (
@@ -300,8 +300,8 @@ export default function Messages() {
       <div className="flex-1 overflow-y-auto px-6 space-y-4 pb-24">
         {loading ? (
           <div className="space-y-4">
-            {[1,2,3,4].map(i => (
-              <div key={i} className="h-20 bg-zinc-900/40 animate-pulse rounded-[2rem]" />
+            {[1, 2, 3, 4].map(i => (
+              <div key={`messages-skeleton-thread-${i}`} className="h-20 bg-zinc-900/40 animate-pulse rounded-[2rem]" />
             ))}
           </div>
         ) : filteredThreads.length === 0 ? (
@@ -596,7 +596,15 @@ function ChatRoom({ chatId, onBack }: { chatId: string, onBack: () => void }) {
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ChatMessage[]);
+      const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ChatMessage[];
+      // Deduplicate by ID
+      const seen = new Set();
+      const uniqueMsgs = msgs.filter(m => {
+        if (seen.has(m.id)) return false;
+        seen.add(m.id);
+        return true;
+      });
+      setMessages(uniqueMsgs);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, `chats/${chatId}/messages`);
     });

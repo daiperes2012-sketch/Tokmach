@@ -303,7 +303,7 @@ export default function LivesList({ onSelectLive, onStartLive }: {
       <div className="flex-1 overflow-y-auto p-4 pb-24 no-scrollbar">
         {loading ? (
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
-            {[...Array(6)].map((_, i) => <LiveSkeleton key={i} />)}
+            {[...Array(6)].map((_, i) => <LiveSkeleton key={`live-skeleton-${i}`} />)}
           </div>
         ) : filteredLives.length > 0 ? (
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">

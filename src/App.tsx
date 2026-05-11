@@ -228,7 +228,7 @@ function AppContent() {
           >
             <div className="flex -space-x-3">
               {[1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className="relative">
+                <div key={`login-user-${i}`} className="relative">
                   <div className="absolute inset-0 bg-pink-500/20 blur-md rounded-full" />
                   <img 
                     src={`https://api.dicebear.com/7.x/avataaars/svg?seed=user${i + 10}`}
